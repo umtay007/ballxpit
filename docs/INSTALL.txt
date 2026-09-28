@@ -4,24 +4,34 @@ Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (t
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
 and controls Player 2 with keyboard and mouse or a controller.
 
-You need BepInEx 6 for IL2CPP (the same setup Local Coop needs) and a Windows PC.
+Windows only.
 
 
 INSTALL (host only)
 -------------------
-1. Extract this zip into the BALL x PIT game folder (the one with BALLxPIT.exe, for example
-   E:\SteamLibrary\steamapps\common\BALLxPIT). Allow it to overwrite files. Careful: Windows'
-   "Extract All" suggests a new folder named after the zip; remove that part of the path so the
-   BepInEx folder from the zip lands on top of the game's BepInEx folder. You get:
-     BepInEx/plugins/BALLxPITLocalCoop.dll
-         Local Coop 0.1.0 plus two small input hooks. It replaces the original DLL and plays
-         exactly the same when nobody is online.
-     BepInEx/plugins/BALLxPITOnlineCoop/BALLxPITOnlineCoop.dll
-         The online part.
-   If your old BALLxPITLocalCoop.dll lived somewhere else (a Vortex folder, say), delete it; if
-   you forget, BepInEx still picks the new one because its version is higher.
-2. Start the game. In the main menu an "Online Co-op (F8)" button appears in the top-right
-   corner. If it doesn't, see "If something's off" below.
+BALLxPITOnlineCoop-with-BepInEx.zip has everything, including BepInEx 6 (the mod loader for
+IL2CPP games; BepInEx 5 does not work with BALL x PIT). BALLxPITOnlineCoop.zip is the same without
+BepInEx, for a game that already runs BepInEx 6.
+
+1. Close the game. Extract the zip into the BALL x PIT game folder, the one with BALLxPIT.exe (for
+   example E:\SteamLibrary\steamapps\common\BALLxPIT), and allow it to overwrite files.
+   Careful: Windows' "Extract All" suggests a new folder named after the zip. Remove that part of
+   the path. Afterwards these must sit right next to BALLxPIT.exe:
+       winhttp.dll   doorstop_config.ini   dotnet\   BepInEx\
+   and these inside it:
+       BepInEx\plugins\BALLxPITLocalCoop.dll
+           sparrow's Local Coop 0.1.0 plus two small input hooks. It replaces the original and plays
+           exactly the same when nobody is online.
+       BepInEx\plugins\BALLxPITOnlineCoop\BALLxPITOnlineCoop.dll
+           The online part.
+   If an old BALLxPITLocalCoop.dll lives somewhere else under BepInEx\plugins, delete it. (If you
+   forget, BepInEx still picks the new one because its version is higher.)
+2. Start the game. The FIRST start takes a few minutes: a black BepInEx window with scrolling text
+   opens and BepInEx prepares the game (it downloads some Unity files, so stay online). Don't close
+   that window; closing it closes the game. Later starts are quick.
+3. In the main menu an "Online Co-op (F8)" button appears in the top-right corner, and when you
+   start a run a second player (Local Coop's P2) stands next to you. If not, see
+   "If something's off" below.
 
 
 HOST A GAME
@@ -58,13 +68,12 @@ YOUR FRIEND'S CONTROLS
 
 IF SOMETHING'S OFF
 ------------------
-- No "Online Co-op (F8)" button in the main menu: the plugin isn't loading. Check that these two
-  files exist (with your game folder in front):
-      BepInEx\plugins\BALLxPITLocalCoop.dll
-      BepInEx\plugins\BALLxPITOnlineCoop\BALLxPITOnlineCoop.dll
-  and that there is no extra BepInEx folder one level down, such as
-  BALLxPIT\BALLxPITOnlineCoop\BepInEx. Then look in BepInEx\LogOutput.log for
-  "BALLxPIT: Online Coop"; the lines around it say what went wrong.
+- No black BepInEx window on start, and no BepInEx\LogOutput.log afterwards: BepInEx isn't
+  running. winhttp.dll and doorstop_config.ini must be right next to BALLxPIT.exe, not in a
+  subfolder.
+- No "Online Co-op (F8)" button in the main menu, and no second player in runs: the mods aren't
+  loading. Check the two DLL paths above and that there's no extra BepInEx folder one level down,
+  such as BALLxPIT\BALLxPITOnlineCoop\BepInEx. BepInEx\LogOutput.log says what went wrong.
 - The button is there but F8 does nothing: some keyboards need Fn+F8, and other programs can take
   F8. Click the button instead, or pick another key with PanelKey in the config.
 - "Still connecting to Cloudflare": a firewall or antivirus is blocking cloudflared.exe. Allow it,
@@ -80,5 +89,6 @@ Everything the mod does is logged in BepInEx/LogOutput.log.
 
 Settings live in BepInEx/config/BALLxPITOnlineCoop.cfg (created on first start).
 
+BepInEx (https://github.com/BepInEx/BepInEx) is LGPL-2.1; its license is in BepInEx\LICENSE-BepInEx.txt.
 Local Coop is by sparrow (https://www.nexusmods.com/ballxpit/mods/24). The BALLxPITLocalCoop.dll
 in this zip is their mod with online hooks added, for personal use; ask them before sharing it.

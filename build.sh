@@ -4,7 +4,10 @@
 #   ./build.sh [path/to/original/BALLxPITLocalCoop.dll]
 #
 # The original Local Coop 0.1.0 DLL (from Nexus Mods) is needed as input: the build adds the online
-# hooks to it. It defaults to original/BALLxPITLocalCoop.dll. Output: dist/BALLxPITOnlineCoop.zip.
+# hooks to it. It defaults to original/BALLxPITLocalCoop.dll. Output:
+#   dist/BALLxPITOnlineCoop.zip                 the two mod DLLs, for a game that already has BepInEx 6
+#   dist/BALLxPITOnlineCoop-with-BepInEx.zip    the same plus BepInEx 6.0.0-be.788 for IL2CPP, ready to
+#                                               extract into a clean game folder
 # Needs the .NET 8 SDK; builds on Linux, macOS or Windows (Git Bash).
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -31,6 +34,21 @@ mkdir -p dist/stage/BepInEx/plugins/BALLxPITOnlineCoop
 cp out/patched/BALLxPITLocalCoop.dll dist/stage/BepInEx/plugins/BALLxPITLocalCoop.dll
 cp out/plugin/BALLxPITOnlineCoop.dll dist/stage/BepInEx/plugins/BALLxPITOnlineCoop/
 cp docs/INSTALL.txt dist/stage/BALLxPITOnlineCoop-README.txt
-rm -f dist/BALLxPITOnlineCoop.zip
+rm -f dist/BALLxPITOnlineCoop.zip dist/BALLxPITOnlineCoop-with-BepInEx.zip
 (cd dist/stage && zip -qr ../BALLxPITOnlineCoop.zip .)
 echo "Built dist/BALLxPITOnlineCoop.zip"
+
+# All-in-one: BepInEx itself (LGPL-2.1) with the Unity 6 setting BALL x PIT needs, plus the mods.
+BEPINEX_URL="https://builds.bepinex.dev/projects/bepinex_be/788/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.788%2B5b766a3.zip"
+BEPINEX_ZIP="lib/.pkgs/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.788.zip"
+[ -f "$BEPINEX_ZIP" ] || curl -fsSL -o "$BEPINEX_ZIP" "$BEPINEX_URL"
+[ -f lib/.pkgs/BepInEx-LICENSE.txt ] || curl -fsSL -o lib/.pkgs/BepInEx-LICENSE.txt https://raw.githubusercontent.com/BepInEx/BepInEx/master/LICENSE
+rm -rf dist/stage-full
+mkdir -p dist/stage-full
+unzip -q "$BEPINEX_ZIP" -d dist/stage-full
+cp -r dist/stage/. dist/stage-full/
+mkdir -p dist/stage-full/BepInEx/config
+cp docs/BepInEx.cfg dist/stage-full/BepInEx/config/BepInEx.cfg
+cp lib/.pkgs/BepInEx-LICENSE.txt dist/stage-full/BepInEx/LICENSE-BepInEx.txt
+(cd dist/stage-full && zip -qr ../BALLxPITOnlineCoop-with-BepInEx.zip .)
+echo "Built dist/BALLxPITOnlineCoop-with-BepInEx.zip"

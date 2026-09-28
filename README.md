@@ -46,7 +46,10 @@ Needs the .NET 8 SDK and the original `BALLxPITLocalCoop.dll` 0.1.0 from Nexus M
 in this repository.
 
 ```sh
-./build.sh path/to/BALLxPITLocalCoop.dll     # makes dist/BALLxPITOnlineCoop.zip
+./build.sh path/to/BALLxPITLocalCoop.dll
+# dist/BALLxPITOnlineCoop.zip               the two mod DLLs, for a game that already has BepInEx 6
+# dist/BALLxPITOnlineCoop-with-BepInEx.zip  plus BepInEx 6.0.0-be.788 (IL2CPP, win-x64) with
+#                                           UnityLogListening off, as Unity 6 games need
 ```
 
 The plugin compiles against BepInEx 6 be.788 / Il2CppInterop 1.5.3 (fetched by
