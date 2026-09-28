@@ -5,7 +5,7 @@
 #
 # The original Local Coop 0.1.0 DLL (from Nexus Mods) is needed as input: the build adds the online
 # hooks to it. It defaults to original/BALLxPITLocalCoop.dll. Output:
-#   dist/BALLxPITOnlineCoop.zip                 the two mod DLLs, for a game that already has BepInEx 6
+#   dist/BALLxPITOnlineCoop.zip                 the two mod DLLs and a starting BepInEx.cfg
 #   dist/BALLxPITOnlineCoop-with-BepInEx.zip    the same plus BepInEx 6.0.0-be.788 for IL2CPP, ready to
 #                                               extract into a clean game folder
 # Needs the .NET 8 SDK; builds on Linux, macOS or Windows (Git Bash).
@@ -34,6 +34,9 @@ mkdir -p dist/stage/BepInEx/plugins/BALLxPITOnlineCoop
 cp out/patched/BALLxPITLocalCoop.dll dist/stage/BepInEx/plugins/BALLxPITLocalCoop.dll
 cp out/plugin/BALLxPITOnlineCoop.dll dist/stage/BepInEx/plugins/BALLxPITOnlineCoop/
 cp docs/INSTALL.txt dist/stage/BALLxPITOnlineCoop-README.txt
+# BALL x PIT is a Unity 6 game: BepInEx needs UnityLogListening off there.
+mkdir -p dist/stage/BepInEx/config
+cp docs/BepInEx.cfg dist/stage/BepInEx/config/BepInEx.cfg
 rm -f dist/BALLxPITOnlineCoop.zip dist/BALLxPITOnlineCoop-with-BepInEx.zip
 (cd dist/stage && zip -qr ../BALLxPITOnlineCoop.zip .)
 echo "Built dist/BALLxPITOnlineCoop.zip"
@@ -47,8 +50,6 @@ rm -rf dist/stage-full
 mkdir -p dist/stage-full
 unzip -q "$BEPINEX_ZIP" -d dist/stage-full
 cp -r dist/stage/. dist/stage-full/
-mkdir -p dist/stage-full/BepInEx/config
-cp docs/BepInEx.cfg dist/stage-full/BepInEx/config/BepInEx.cfg
 cp lib/.pkgs/BepInEx-LICENSE.txt dist/stage-full/BepInEx/LICENSE-BepInEx.txt
 (cd dist/stage-full && zip -qr ../BALLxPITOnlineCoop-with-BepInEx.zip .)
 echo "Built dist/BALLxPITOnlineCoop-with-BepInEx.zip"

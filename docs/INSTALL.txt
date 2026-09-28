@@ -9,27 +9,32 @@ Windows only.
 
 INSTALL (host only)
 -------------------
-BALLxPITOnlineCoop-with-BepInEx.zip has everything, including BepInEx 6 (the mod loader for
-IL2CPP games; BepInEx 5 does not work with BALL x PIT). BALLxPITOnlineCoop.zip is the same without
-BepInEx, for a game that already runs BepInEx 6.
-
-1. Close the game. Extract the zip into the BALL x PIT game folder, the one with BALLxPIT.exe (for
-   example E:\SteamLibrary\steamapps\common\BALLxPIT), and allow it to overwrite files.
+1. Close the game.
+2. BepInEx 6, the mod loader (skip if your game already runs BepInEx 6; BepInEx 5 does not work
+   with BALL x PIT). Download
+       https://builds.bepinex.dev/projects/bepinex_be/788/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.788%2B5b766a3.zip
+   and extract everything in it into the BALL x PIT game folder, the one with BALLxPIT.exe (for
+   example E:\SteamLibrary\steamapps\common\BALLxPIT).
    Careful: Windows' "Extract All" suggests a new folder named after the zip. Remove that part of
    the path. Afterwards these must sit right next to BALLxPIT.exe:
        winhttp.dll   doorstop_config.ini   dotnet\   BepInEx\
-   and these inside it:
+3. Extract this zip into the same game folder, again without an extra folder, and allow it to
+   overwrite files. It adds:
        BepInEx\plugins\BALLxPITLocalCoop.dll
            sparrow's Local Coop 0.1.0 plus two small input hooks. It replaces the original and plays
            exactly the same when nobody is online.
        BepInEx\plugins\BALLxPITOnlineCoop\BALLxPITOnlineCoop.dll
            The online part.
+       BepInEx\config\BepInEx.cfg
+           Turns off a BepInEx feature that doesn't work in Unity 6 games like this one.
    If an old BALLxPITLocalCoop.dll lives somewhere else under BepInEx\plugins, delete it. (If you
    forget, BepInEx still picks the new one because its version is higher.)
-2. Start the game. The FIRST start takes a few minutes: a black BepInEx window with scrolling text
+(If you have BALLxPITOnlineCoop-with-BepInEx.zip, it already contains step 2: just extract it.)
+
+4. Start the game. The FIRST start takes a few minutes: a black BepInEx window with scrolling text
    opens and BepInEx prepares the game (it downloads some Unity files, so stay online). Don't close
    that window; closing it closes the game. Later starts are quick.
-3. In the main menu an "Online Co-op (F8)" button appears in the top-right corner, and when you
+5. In the main menu an "Online Co-op (F8)" button appears in the top-right corner, and when you
    start a run a second player (Local Coop's P2) stands next to you. If not, see
    "If something's off" below.
 
