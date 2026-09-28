@@ -1,0 +1,84 @@
+BALLxPIT Online Co-op 0.1.1
+===========================
+Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
+game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
+and controls Player 2 with keyboard and mouse or a controller.
+
+You need BepInEx 6 for IL2CPP (the same setup Local Coop needs) and a Windows PC.
+
+
+INSTALL (host only)
+-------------------
+1. Extract this zip into the BALL x PIT game folder (the one with BALLxPIT.exe, for example
+   E:\SteamLibrary\steamapps\common\BALLxPIT). Allow it to overwrite files. Careful: Windows'
+   "Extract All" suggests a new folder named after the zip; remove that part of the path so the
+   BepInEx folder from the zip lands on top of the game's BepInEx folder. You get:
+     BepInEx/plugins/BALLxPITLocalCoop.dll
+         Local Coop 0.1.0 plus two small input hooks. It replaces the original DLL and plays
+         exactly the same when nobody is online.
+     BepInEx/plugins/BALLxPITOnlineCoop/BALLxPITOnlineCoop.dll
+         The online part.
+   If your old BALLxPITLocalCoop.dll lived somewhere else (a Vortex folder, say), delete it; if
+   you forget, BepInEx still picks the new one because its version is higher.
+2. Start the game. In the main menu an "Online Co-op (F8)" button appears in the top-right
+   corner. If it doesn't, see "If something's off" below.
+
+
+HOST A GAME
+-----------
+1. Press F8 (or click the "Online Co-op (F8)" button) and click "Host an online game".
+2. Wait a few seconds for a line like
+       Internet link: https://some-random-words.trycloudflare.com/#K7QM2P  (click to copy)
+   The first time, the mod downloads cloudflared.exe (Cloudflare's free tunnel program, about
+   40 MB) into BepInEx/plugins/BALLxPITOnlineCoop. Click the line to copy the link.
+3. Send the link to your friend (Discord, text, anything). They open it in Chrome, Edge or
+   Firefox, type a name and click "Join as Player 2". The code after # is the password, so only
+   people you send the link to can get in.
+4. Start a run. Your friend now controls P2. You still do the menus, level-up picks and pausing.
+
+Other links the panel can show:
+  Direct link       http://your-ip:47777/...  Offered when your router accepts UPnP. A little less
+                    lag than the internet link. Controllers may only work on the https link.
+  Same Wi-Fi link   For someone in your house.
+Windows may ask whether BALLxPIT may accept connections: allow it for the direct and Wi-Fi links.
+The internet link works either way.
+
+More people can open the link while P2 is taken; they watch, and get a "Play as P2" button when
+the spot frees up. Use "Kick P2", "New code" and "Stop hosting" in the F8 panel.
+
+
+YOUR FRIEND'S CONTROLS
+----------------------
+  Move                WASD or arrow keys, or the left stick
+  Aim                 point with the mouse, the right stick, or hold J / L to turn
+  Shoot               hold the left mouse button or Space, or RT / A
+  Auto-shoot on/off   E or right-click, or Y
+  Full screen         F        Sound on/off   M        Help   H
+
+
+IF SOMETHING'S OFF
+------------------
+- No "Online Co-op (F8)" button in the main menu: the plugin isn't loading. Check that these two
+  files exist (with your game folder in front):
+      BepInEx\plugins\BALLxPITLocalCoop.dll
+      BepInEx\plugins\BALLxPITOnlineCoop\BALLxPITOnlineCoop.dll
+  and that there is no extra BepInEx folder one level down, such as
+  BALLxPIT\BALLxPITOnlineCoop\BepInEx. Then look in BepInEx\LogOutput.log for
+  "BALLxPIT: Online Coop"; the lines around it say what went wrong.
+- The button is there but F8 does nothing: some keyboards need Fn+F8, and other programs can take
+  F8. Click the button instead, or pick another key with PanelKey in the config.
+- "Still connecting to Cloudflare": a firewall or antivirus is blocking cloudflared.exe. Allow it,
+  or use the direct link.
+- The panel says your Local Coop DLL is the original: the old BALLxPITLocalCoop.dll is still being
+  loaded. Delete it and keep the one from this zip.
+- Choppy or blurry picture: your upload is the limit. The mod already lowers quality by itself. In
+  BepInEx/config/BALLxPITOnlineCoop.cfg you can set MaxWidth = 640 or MaxFps = 20.
+- Picture upside down for your friend: they press H and tick "Flip it".
+- No game sound for your friend: set StreamAudio = false if it causes any trouble for you.
+- Game stutters for you while hosting: lower MaxFps in the config.
+Everything the mod does is logged in BepInEx/LogOutput.log.
+
+Settings live in BepInEx/config/BALLxPITOnlineCoop.cfg (created on first start).
+
+Local Coop is by sparrow (https://www.nexusmods.com/ballxpit/mods/24). The BALLxPITLocalCoop.dll
+in this zip is their mod with online hooks added, for personal use; ask them before sharing it.

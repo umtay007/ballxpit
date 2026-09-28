@@ -1,0 +1,7 @@
+{
+  "name": "ballxpit-online-coop-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "e2e": "node e2e.mjs" },
+  "devDependencies": { "playwright-core": "1.56.1" }
+}

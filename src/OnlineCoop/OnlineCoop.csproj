@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The online add-on for "BALLxPIT: Local Coop". Build with ../../build.sh, which first produces the
+    stub and reference assemblies this project compiles against.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>BALLxPITOnlineCoop</AssemblyName>
+    <RootNamespace>BALLxPITOnlineCoop</RootNamespace>
+    <LangVersion>11.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Version>0.1.1</Version>
+    <Product>BALLxPIT Online Coop</Product>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <DebugType>embedded</DebugType>
+    <NoWarn>NETSDK1138</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Root>$(MSBuildThisFileDirectory)../../</Root>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(Root)client/index.html" LogicalName="BALLxPITOnlineCoop.client.html" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Real framework assemblies (fetched by tools/fetch-deps.sh). -->
+    <Reference Include="BepInEx.Core"><HintPath>$(Root)lib/BepInEx.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="BepInEx.Unity.IL2CPP"><HintPath>$(Root)lib/BepInEx.Unity.IL2CPP.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Runtime"><HintPath>$(Root)lib/Il2CppInterop.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Common"><HintPath>$(Root)lib/Il2CppInterop.Common.dll</HintPath><Private>false</Private></Reference>
+    <!-- Stand-ins for the game's interop assemblies and the publicized Local Coop reference. -->
+    <Reference Include="Il2Cppmscorlib"><HintPath>$(Root)out/stubs/Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(Root)out/stubs/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(Root)out/stubs/UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(Root)out/stubs/UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.AudioModule"><HintPath>$(Root)out/stubs/UnityEngine.AudioModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Assembly-CSharp"><HintPath>$(Root)out/stubs/Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="BALLxPITLocalCoop"><HintPath>$(Root)out/ref/BALLxPITLocalCoop.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

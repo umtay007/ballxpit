@@ -1,0 +1,7 @@
+lib/
+bin/
+obj/
+out/
+dist/
+original/
+node_modules/

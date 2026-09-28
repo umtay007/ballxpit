@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BALL x PIT Online Co-op</title>
+<style>
+  :root {
+    --bg: #0b0b10;
+    --panel: #16161f;
+    --panel-2: #1f1f2b;
+    --text: #ececf2;
+    --muted: #9a9ab0;
+    --accent: #ffcc33;
+    --accent-ink: #1a1400;
+    --danger: #ff6b6b;
+    --ok: #5ee08a;
+    --border: #2c2c3a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  button { font: inherit; color: inherit; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button:hover { border-color: #444458; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 650; }
+  button.small { padding: 4px 10px; font-size: 13px; }
+  input { font: inherit; color: var(--text); background: #0f0f16; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; width: 100%; }
+  input:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #screen { display: block; background: #000; image-rendering: auto; cursor: crosshair; touch-action: none; }
+  #screen.flipped { transform: scaleY(-1); }
+
+  #bar { position: fixed; top: 0; left: 0; right: 0; display: flex; gap: 10px; align-items: center; padding: 8px 12px; background: linear-gradient(#000c, #0000); font-size: 13px; opacity: 1; transition: opacity .4s; pointer-events: none; }
+  #bar.idle { opacity: 0; }
+  #bar > * { pointer-events: auto; }
+  #bar .spacer { flex: 1; }
+  .pill { padding: 3px 9px; border-radius: 999px; background: #0008; border: 1px solid #fff2; white-space: nowrap; }
+  .pill.role-player { color: var(--accent); border-color: #ffcc3366; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
+  .dot.on { background: var(--ok); }
+  .dot.bad { background: var(--danger); }
+
+  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000a; padding: 16px; }
+  .overlay[hidden] { display: none; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; width: min(440px, 100%); box-shadow: 0 20px 60px #0009; }
+  .card h1 { margin: 0 0 4px; font-size: 21px; }
+  .card p { margin: 0 0 14px; color: var(--muted); }
+  .card label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 5px; }
+  .row { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+  .row button { flex: 1; }
+  .error { color: var(--danger); margin-top: 10px; min-height: 1.2em; }
+
+  #help table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  #help td { padding: 6px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  #help td:first-child { color: var(--muted); width: 40%; padding-right: 10px; }
+  kbd { font: 12px ui-monospace, monospace; background: #0f0f16; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; font-size: 14px; max-width: calc(100% - 32px); text-align: center; transition: opacity .3s; }
+  #toast[hidden] { display: block; opacity: 0; pointer-events: none; }
+  #waiting { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); pointer-events: none; }
+  #waiting[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="screen" width="960" height="540" aria-label="The host's game"></canvas></div>
+<div id="waiting" hidden>Waiting for the picture…</div>
+
+<div id="bar">
+  <span class="pill" id="conn"><span class="dot" id="connDot"></span><span id="connText">Offline</span></span>
+  <span class="pill" id="role" hidden></span>
+  <span class="pill" id="auto" hidden></span>
+  <span class="pill" id="stats" hidden></span>
+  <span class="spacer"></span>
+  <button class="small primary" id="claimBtn" hidden>Play as P2</button>
+  <button class="small" id="muteBtn" title="Game sound (M)">Sound on</button>
+  <button class="small" id="helpBtn" title="Controls (H)">Controls</button>
+  <button class="small" id="fullBtn" title="Full screen (F)">Full screen</button>
+</div>
+
+<div class="overlay" id="join">
+  <form class="card" id="joinForm" autocomplete="off">
+    <h1>BALL x PIT co-op</h1>
+    <p id="joinIntro">You're joining as Player 2. The host sees your moves instantly and you see their screen.</p>
+    <label for="nameInput">Your name</label>
+    <input id="nameInput" maxlength="20" placeholder="Player 2">
+    <div id="codeRow" hidden>
+      <label for="codeInput">Join code</label>
+      <input id="codeInput" maxlength="12" placeholder="From the host's link" style="text-transform: uppercase">
+    </div>
+    <div class="row">
+      <button type="submit" class="primary" id="playBtn">Join as Player 2</button>
+      <button type="button" id="watchBtn">Just watch</button>
+    </div>
+    <div class="error" id="joinError" role="alert"></div>
+  </form>
+</div>
+
+<div class="overlay" id="help" hidden>
+  <div class="card">
+    <h1>Controls</h1>
+    <table>
+      <tr><td>Move</td><td><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrow keys · left stick</td></tr>
+      <tr><td>Aim</td><td>Point with the mouse · right stick · or hold <kbd>J</kbd>/<kbd>L</kbd> to turn</td></tr>
+      <tr><td>Shoot</td><td>Hold left mouse or <kbd>Space</kbd> · <kbd>RT</kbd> or <kbd>A</kbd></td></tr>
+      <tr><td>Auto-shoot on/off</td><td><kbd>E</kbd> or right-click · <kbd>Y</kbd></td></tr>
+      <tr><td>Full screen</td><td><kbd>F</kbd></td></tr>
+      <tr><td>Sound on/off</td><td><kbd>M</kbd></td></tr>
+      <tr><td>This help</td><td><kbd>H</kbd></td></tr>
+    </table>
+    <p style="margin-top:14px">Menus, level-ups and pausing are done by the host. <span id="padNote"></span></p>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin:0 0 4px"><input type="checkbox" id="flipBox" style="width:auto"> Picture upside down? Flip it.</label>
+    <div class="row"><button class="primary" id="helpClose">Back to the game</button></div>
+  </div>
+</div>
+
+<div id="toast" hidden role="status"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- small helpers ----------
+  const $ = (id) => document.getElementById(id);
+  const canvas = $('screen');
+  const ctx2d = canvas.getContext('2d', { alpha: false });
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+  let toastTimer = 0;
+  function toast(text, ms = 3500) {
+    const t = $('toast');
+    t.textContent = text;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+  }
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+  let clientId;
+  try {
+    clientId = sessionStorage.getItem('coopClientId');
+    if (!clientId) { clientId = Math.random().toString(36).slice(2) + Date.now().toString(36); sessionStorage.setItem('coopClientId', clientId); }
+  } catch { clientId = Math.random().toString(36).slice(2); }
+
+  // ---------- join form ----------
+  const hashCode = decodeURIComponent(location.hash.replace(/^#/, '')).trim();
+  if (!hashCode) $('codeRow').hidden = false;
+  $('nameInput').value = store.get('coopName', '');
+  let wantRole = 'player';
+  let code = hashCode;
+
+  $('joinForm').addEventListener('submit', (e) => { e.preventDefault(); begin('player'); });
+  $('watchBtn').addEventListener('click', () => begin('watch'));
+
+  function begin(want) {
+    const name = $('nameInput').value.trim() || 'Player 2';
+    store.set('coopName', name);
+    if (!hashCode) code = $('codeInput').value.trim().toUpperCase();
+    if (!code) { $('joinError').textContent = 'Enter the join code from the host.'; return; }
+    wantRole = want;
+    myName = name;
+    stopReconnect = false;
+    $('joinError').textContent = '';
+    $('join').hidden = true;
+    audio.start();
+    connect();
+  }
+
+  // ---------- connection ----------
+  let ws = null;
+  let myName = '';
+  let role = '';
+  let stopReconnect = false;
+  let retryDelay = 1000;
+  let lastRtt = 0;
+  let bytesIn = 0;
+  let framesDrawn = 0;
+
+  function setConn(text, state) {
+    $('connText').textContent = text;
+    $('connDot').className = 'dot' + (state === 'on' ? ' on' : state === 'bad' ? ' bad' : '');
+  }
+
+  function connect() {
+    const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+    setConn('Connecting…');
+    let opened = false;
+    const sock = new WebSocket(url);
+    sock.binaryType = 'arraybuffer';
+    ws = sock;
+    sock.onopen = () => {
+      opened = true;
+      retryDelay = 1000;
+      send({ t: 'hello', code, name: myName, want: wantRole, id: clientId });
+    };
+    sock.onmessage = (ev) => {
+      if (typeof ev.data === 'string') { onControl(JSON.parse(ev.data)); return; }
+      bytesIn += ev.data.byteLength;
+      const kind = new Uint8Array(ev.data, 0, 1)[0];
+      if (kind === 1) onVideo(ev.data);
+      else if (kind === 2) audio.onPacket(ev.data);
+    };
+    sock.onclose = () => {
+      if (ws !== sock) return;
+      ws = null;
+      role = '';
+      input.reset();
+      updateRole();
+      if (stopReconnect) return;
+      setConn(opened ? 'Reconnecting…' : 'Can’t reach the host', 'bad');
+      setTimeout(connect, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 10000);
+    };
+  }
+
+  function send(obj) {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+  }
+
+  function onControl(msg) {
+    switch (msg.t) {
+      case 'welcome':
+        role = msg.role;
+        setConn('Connected to ' + (msg.host || 'host'), 'on');
+        if (audio.muted) send({ t: 'audio', on: false });
+        updateRole();
+        $('waiting').hidden = framesDrawn > 0;
+        toast(role === 'player' ? 'You are Player 2. Press H for controls.' : 'Watching. Someone else is playing P2.');
+        break;
+      case 'role':
+        role = msg.role;
+        updateRole();
+        if (role === 'player') toast('You are Player 2 now.');
+        break;
+      case 'status':
+        lastStatus = msg;
+        updateStatus();
+        break;
+      case 'pong':
+        lastRtt = Math.round(performance.now() - msg.c);
+        break;
+      case 'error':
+        stopReconnect = true;
+        showJoinError(msg.msg || 'The host refused the connection.');
+        break;
+      case 'kicked':
+        stopReconnect = true;
+        setConn('Removed by the host', 'bad');
+        toast('The host removed you from the game.', 8000);
+        break;
+    }
+  }
+
+  function showJoinError(text) {
+    $('join').hidden = false;
+    $('joinError').textContent = text;
+    if (/code/i.test(text)) $('codeRow').hidden = false;
+    setConn('Not connected', 'bad');
+  }
+
+  let lastStatus = null;
+  function updateRole() {
+    const r = $('role');
+    r.hidden = !role;
+    r.textContent = role === 'player' ? 'You are P2' : 'Watching';
+    r.className = 'pill' + (role === 'player' ? ' role-player' : '');
+    updateStatus();
+  }
+  function updateStatus() {
+    const s = lastStatus;
+    $('claimBtn').hidden = !(role === 'spectator' && s && !s.player);
+    const a = $('auto');
+    if (s && role === 'player') {
+      a.hidden = false;
+      a.textContent = !s.p2 ? 'P2 appears when a run starts' : s.autoChar ? 'Auto-shoot: character' : ('Auto-shoot: ' + (s.auto ? 'on' : 'off'));
+    } else a.hidden = true;
+  }
+  $('claimBtn').addEventListener('click', () => send({ t: 'claim' }));
+
+  setInterval(() => send({ t: 'ping', c: performance.now(), rtt: lastRtt }), 1000);
+
+  // ---------- video ----------
+  let decoding = false;
+  let pendingFrame = null;
+  let frameW = 0, frameH = 0;
+
+  function onVideo(buf) {
+    const view = new DataView(buf);
+    const frame = { id: view.getUint32(1, true), w: view.getUint16(5, true), h: view.getUint16(7, true), data: new Uint8Array(buf, 9) };
+    if (pendingFrame) ack(pendingFrame); // superseded before we got to it
+    pendingFrame = frame;
+    if (!decoding) drawNext();
+  }
+
+  function ack(frame) { send({ t: 'ack', f: frame.id }); }
+
+  async function drawNext() {
+    const frame = pendingFrame;
+    if (!frame) return;
+    pendingFrame = null;
+    decoding = true;
+    try {
+      const blob = new Blob([frame.data], { type: 'image/jpeg' });
+      let img;
+      if (window.createImageBitmap) img = await createImageBitmap(blob);
+      else img = await loadImage(blob);
+      if (frame.w !== frameW || frame.h !== frameH) {
+        frameW = frame.w; frameH = frame.h;
+        canvas.width = frameW; canvas.height = frameH;
+        layout();
+      }
+      ctx2d.drawImage(img, 0, 0, frameW, frameH);
+      if (img.close) img.close();
+      framesDrawn++;
+      $('waiting').hidden = true;
+    } catch (e) {
+      // A corrupt frame; the next one will replace it.
+    }
+    ack(frame);
+    decoding = false;
+    if (pendingFrame) drawNext();
+  }
+
+  function loadImage(blob) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(blob);
+      const im = new Image();
+      im.onload = () => { URL.revokeObjectURL(url); resolve(im); };
+      im.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+      im.src = url;
+    });
+  }
+
+  function layout() {
+    const w = canvas.width || 16, h = canvas.height || 9;
+    const scale = Math.min(window.innerWidth / w, window.innerHeight / h);
+    canvas.style.width = Math.floor(w * scale) + 'px';
+    canvas.style.height = Math.floor(h * scale) + 'px';
+  }
+  window.addEventListener('resize', layout);
+  layout();
+
+  const flipBox = $('flipBox');
+  flipBox.checked = store.get('coopFlip', '0') === '1';
+  canvas.classList.toggle('flipped', flipBox.checked);
+  flipBox.addEventListener('change', () => {
+    canvas.classList.toggle('flipped', flipBox.checked);
+    store.set('coopFlip', flipBox.checked ? '1' : '0');
+  });
+
+  // Stats line, once a second.
+  let lastFrames = 0, lastBytes = 0;
+  setInterval(() => {
+    const st = $('stats');
+    if (!ws) { st.hidden = true; return; }
+    const fps = framesDrawn - lastFrames, mbit = (bytesIn - lastBytes) * 8 / 1e6;
+    lastFrames = framesDrawn; lastBytes = bytesIn;
+    st.hidden = false;
+    st.textContent = `${lastRtt} ms · ${fps} fps · ${mbit.toFixed(1)} Mbit/s`;
+  }, 1000);
+
+  // ---------- audio (IMA ADPCM, 20 ms packets) ----------
+  const audio = (() => {
+    const IDX = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
+    const STEP = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
+      157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552,
+      1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487,
+      12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767];
+    let ac = null, gain = null, next = 0;
+    let muted = store.get('coopMuted', '0') === '1';
+
+    function decode(buf) {
+      const v = new DataView(buf);
+      const rate = v.getUint32(5, true), frames = v.getUint16(10, true);
+      const pred = [v.getInt16(12, true), v.getInt16(16, true)];
+      const index = [v.getUint8(14), v.getUint8(18)];
+      const out = [new Float32Array(frames), new Float32Array(frames)];
+      const bytes = new Uint8Array(buf, 20, frames);
+      for (let f = 0; f < frames; f++) {
+        const b = bytes[f];
+        for (let ch = 0; ch < 2; ch++) {
+          const code = ch === 0 ? (b & 15) : (b >> 4);
+          const step = STEP[index[ch]];
+          let diff = step >> 3;
+          if (code & 4) diff += step;
+          if (code & 2) diff += step >> 1;
+          if (code & 1) diff += step >> 2;
+          let p = pred[ch] + ((code & 8) ? -diff : diff);
+          p = p > 32767 ? 32767 : p < -32768 ? -32768 : p;
+          pred[ch] = p;
+          let i = index[ch] + IDX[code];
+          index[ch] = i < 0 ? 0 : i > 88 ? 88 : i;
+          out[ch][f] = p / 32768;
+        }
+      }
+      return { rate, frames, out };
+    }
+
+    return {
+      decode,
+      start() {
+        if (ac) return;
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        ac = new AC({ latencyHint: 'interactive' });
+        gain = ac.createGain();
+        gain.gain.value = muted ? 0 : 1;
+        gain.connect(ac.destination);
+        if (ac.state === 'suspended') ac.resume();
+        updateMuteButton();
+      },
+      onPacket(buf) {
+        if (!ac || muted) return;
+        const p = decode(buf);
+        if (!p.frames) return;
+        const b = ac.createBuffer(2, p.frames, p.rate);
+        b.copyToChannel(p.out[0], 0);
+        b.copyToChannel(p.out[1], 1);
+        const now = ac.currentTime;
+        if (next < now + 0.02) next = now + 0.08;       // underrun: rebuild a small cushion
+        else if (next > now + 0.35) return;             // piling up: skip to cut the delay
+        const src = ac.createBufferSource();
+        src.buffer = b;
+        src.connect(gain);
+        src.start(next);
+        next += b.duration;
+      },
+      toggleMute() {
+        muted = !muted;
+        store.set('coopMuted', muted ? '1' : '0');
+        if (gain) gain.gain.value = muted ? 0 : 1;
+        if (ac && ac.state === 'suspended') ac.resume();
+        send({ t: 'audio', on: !muted });
+        updateMuteButton();
+      },
+      get muted() { return muted; },
+    };
+  })();
+  function updateMuteButton() { $('muteBtn').textContent = audio.muted ? 'Sound off' : 'Sound on'; }
+  updateMuteButton();
+  $('muteBtn').addEventListener('click', () => { audio.start(); audio.toggleMute(); });
+  window.__coopAudio = audio; // lets the automated browser test check the decoder
+
+  // ---------- input ----------
+  const input = (() => {
+    const keys = new Set();
+    let pointer = null;            // {u, v}
+    let aimMode = 0;               // 0 none, 1 pointer, 2 direction
+    let aimDir = { x: 0, y: 1 };
+    let aimAngle = Math.PI / 2;    // for J/L turning
+    let mouseShoot = false;
+    let padShoot = false, padMove = { x: 0, y: 0 };
+    let lastSent = '', lastSentAt = 0;
+
+    const MOVE = { left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'], up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'] };
+    const GAME_KEYS = new Set(['KeyA', 'KeyD', 'KeyW', 'KeyS', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'KeyJ', 'KeyL', 'KeyE']);
+    const held = (list) => list.some((k) => keys.has(k));
+
+    function state() {
+      let mx = (held(MOVE.right) ? 1 : 0) - (held(MOVE.left) ? 1 : 0);
+      let my = (held(MOVE.up) ? 1 : 0) - (held(MOVE.down) ? 1 : 0);
+      if (Math.abs(padMove.x) > Math.abs(mx) || Math.abs(padMove.y) > Math.abs(my)) { mx = padMove.x; my = padMove.y; }
+      const len = Math.hypot(mx, my);
+      if (len > 1) { mx /= len; my /= len; }
+      const shoot = keys.has('Space') || mouseShoot || padShoot;
+      let ax = 0, ay = 0;
+      if (aimMode === 1 && pointer) { ax = pointer.u; ay = pointer.v; }
+      else if (aimMode === 2) { ax = aimDir.x; ay = aimDir.y; }
+      return { t: 'in', mx: +mx.toFixed(3), my: +my.toFixed(3), am: aimMode, ax: +ax.toFixed(4), ay: +ay.toFixed(4), sh: shoot ? 1 : 0 };
+    }
+
+    function flush(force) {
+      if (role !== 'player') return;
+      const s = state();
+      const key = JSON.stringify(s);
+      const now = performance.now();
+      if (!force && key === lastSent && now - lastSentAt < 200) return;
+      if (!force && now - lastSentAt < 12) return; // ~80 messages/s at most
+      lastSent = key;
+      lastSentAt = now;
+      send(s);
+    }
+
+    function toggleAuto() { if (role === 'player') send({ t: 'tog', what: 'auto' }); }
+
+    window.addEventListener('keydown', (e) => {
+      if (!$('join').hidden || e.target.tagName === 'INPUT') return;
+      if (e.code === 'KeyH') { toggleHelp(); return; }
+      if (e.code === 'KeyF') { toggleFullscreen(); return; }
+      if (e.code === 'KeyM') { audio.start(); audio.toggleMute(); return; }
+      if (e.code === 'Escape' && !$('help').hidden) { toggleHelp(); return; }
+      if (GAME_KEYS.has(e.code)) e.preventDefault();
+      if (e.repeat) return;
+      if (e.code === 'KeyE') toggleAuto();
+      keys.add(e.code);
+      if (e.code === 'KeyJ' || e.code === 'KeyL') aimMode = 2;
+      flush(true);
+    });
+    window.addEventListener('keyup', (e) => { keys.delete(e.code); flush(true); });
+    window.addEventListener('blur', () => { keys.clear(); mouseShoot = false; flush(true); });
+
+    function pointerAt(e) {
+      const r = canvas.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      pointer = { u: clamp((e.clientX - r.left) / r.width, 0, 1), v: clamp((e.clientY - r.top) / r.height, 0, 1) };
+      aimMode = 1;
+    }
+    canvas.addEventListener('pointermove', (e) => { pointerAt(e); flush(false); });
+    canvas.addEventListener('pointerdown', (e) => {
+      pointerAt(e);
+      if (e.button === 0) mouseShoot = true;
+      if (e.button === 2) toggleAuto();
+      try { canvas.setPointerCapture(e.pointerId); } catch {}
+      flush(true);
+    });
+    window.addEventListener('pointerup', (e) => { if (e.button === 0) { mouseShoot = false; flush(true); } });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Keyboard turning, gamepads and the steady heartbeat.
+    let padButtonsPrev = [];
+    let lastTick = performance.now();
+    function tick() {
+      const now = performance.now();
+      const dt = Math.min(0.1, (now - lastTick) / 1000);
+      lastTick = now;
+      const turn = (keys.has('KeyJ') ? 1 : 0) - (keys.has('KeyL') ? 1 : 0);
+      if (turn) {
+        if (aimMode !== 2) aimAngle = Math.atan2(aimDir.y, aimDir.x);
+        aimAngle = clamp(aimAngle + turn * Math.PI * dt, 0.05, Math.PI - 0.05);
+        aimDir = { x: Math.cos(aimAngle), y: Math.sin(aimAngle) };
+        aimMode = 2;
+      }
+      pollPads();
+      flush(false);
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+    setInterval(() => { if (document.hidden) flush(false); }, 100); // rAF stops in background tabs
+
+    function pollPads() {
+      let pads = [];
+      try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch { pads = []; }
+      let pad = null;
+      for (const p of pads) if (p && p.connected) { pad = p; break; }
+      if (!pad) { padMove = { x: 0, y: 0 }; padShoot = false; return; }
+      const dz = (v) => (Math.abs(v) < 0.2 ? 0 : v);
+      padMove = { x: dz(pad.axes[0] || 0), y: -dz(pad.axes[1] || 0) };
+      const rx = pad.axes[2] || 0, ry = -(pad.axes[3] || 0);
+      if (Math.hypot(rx, ry) > 0.35) { aimDir = { x: rx, y: ry }; aimMode = 2; }
+      const btn = (i) => !!(pad.buttons[i] && (pad.buttons[i].pressed || pad.buttons[i].value > 0.4));
+      padShoot = btn(7) || btn(0) || btn(5);
+      const pressed = pad.buttons.map((b, i) => btn(i));
+      if (pressed[3] && !padButtonsPrev[3]) toggleAuto();
+      padButtonsPrev = pressed;
+    }
+    window.addEventListener('gamepadconnected', () => toast('Controller connected.'));
+
+    return {
+      reset() { keys.clear(); mouseShoot = false; padShoot = false; lastSent = ''; },
+      flush,
+    };
+  })();
+
+  // ---------- chrome ----------
+  function toggleHelp() { $('help').hidden = !$('help').hidden; }
+  $('helpBtn').addEventListener('click', toggleHelp);
+  $('helpClose').addEventListener('click', toggleHelp);
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.().catch(() => {});
+  }
+  $('fullBtn').addEventListener('click', toggleFullscreen);
+  if (!navigator.getGamepads || !window.isSecureContext)
+    $('padNote').textContent = 'Controllers work best from the https link.';
+
+  // Hide the top bar while playing; show it again when the mouse reaches the top.
+  let idleTimer = 0;
+  function wake() {
+    $('bar').classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { if (ws) $('bar').classList.add('idle'); }, 3000);
+  }
+  window.addEventListener('mousemove', (e) => { if (e.clientY < 60) wake(); });
+  wake();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+# BALLxPIT Online Co-op
+
+An add-on for sparrow's [BALLxPIT: Local Coop](https://www.nexusmods.com/ballxpit/mods/24) (0.1.0)
+that lets a friend anywhere play Player 2. Only the host runs the game. The friend opens a link in a
+web browser, watches the host's screen, hears the game and controls P2 with keyboard and mouse or a
+controller. Players install it with [docs/INSTALL.txt](docs/INSTALL.txt).
+
+## How it works
+
+```
+ host PC (BALL x PIT + BepInEx)                                   friend's browser
+ ┌───────────────────────────────────────────────┐
+ │ Local Coop (patched): native P2 ◄─ input hooks│
+ │ Online Coop plugin                            │   https://*.trycloudflare.com
+ │   end-of-frame ReadPixels ─► JPEG (parallel) ─┼──► cloudflared ──► Cloudflare ──► page: <canvas>,
+ │   AudioListener tap ─► IMA ADPCM ─────────────┤                                  Web Audio,
+ │   HTTP + WebSocket server ◄───────────────────┼─── keys / mouse / gamepad ◄──── input as JSON
+ └───────────────────────────────────────────────┘   (or a direct UPnP / LAN link)
+```
+
+- **Input.** The build adds two hooks to Local Coop's `PlayerTwoController` (with Mono.Cecil, see
+  `patcher/`): its `Input.GetKey` reads also see keys the guest holds (Shoot), and
+  `UpdatePlayerTwoInput` calls back right before it applies P2's movement and aim. The add-on puts
+  the guest's stick into `_playerTwoMoveDir` and the guest's aim, run through the game's own
+  `BallMgr.MousePosToAimDir`, into `_playerTwoAimDir`. Everything else, such as shooting rules,
+  recall, game over and the aim preview, is Local Coop's own code, unchanged. The add-on reaches Local Coop's
+  private members through `IgnoresAccessChecksTo`, compiling against a publicized copy.
+- **Video.** After each rendered frame (`WaitForEndOfFrame`) the back buffer is read with
+  `Texture2D.ReadPixels`, but only when a guest is ready for another picture. A managed baseline
+  JPEG encoder shrinks it (1920 wide to 960) and encodes horizontal strips in parallel, joined with
+  restart markers. Guests acknowledge frames, and at most two are in flight, so a slow connection
+  lowers the frame rate and then the quality instead of adding delay.
+- **Audio.** A component next to the `AudioListener` copies the final mix in `OnAudioFilterRead`
+  and sends 20 ms IMA ADPCM packets (about 390 kbit/s for 48 kHz stereo).
+- **Host panel.** Press F8, or click the "Online Co-op" button in the top-right corner of the menus
+  (it also shows that the plugin loaded). It's drawn with IMGUI's `GUI.Button`, the one IMGUI call
+  Local Coop already relies on.
+- **Reaching the host.** A small HTTP/WebSocket server (no HttpListener, so no admin rights) serves
+  the page in `client/index.html` and the stream. Cloudflare quick tunnels give an https link that
+  works through any NAT; UPnP adds a direct link when the router allows it. The link's `#code` is
+  the password.
+
+## Build
+
+Needs the .NET 8 SDK and the original `BALLxPITLocalCoop.dll` 0.1.0 from Nexus Mods. The DLL isn't
+in this repository.
+
+```sh
+./build.sh path/to/BALLxPITLocalCoop.dll     # makes dist/BALLxPITOnlineCoop.zip
+```
+
+The plugin compiles against BepInEx 6 be.788 / Il2CppInterop 1.5.3 (fetched by
+`tools/fetch-deps.sh`) and against `stubs/`. These are stand-ins for the game's interop assemblies
+and declare only the members the plugin calls, with Il2CppInterop's exact signatures. Apart from
+`ReadPixels`, `GetRawTextureData`, the `Texture2D` constructor, `ScreenToWorldPoint`,
+`WaitForEndOfFrame` and `AudioSettings.outputSampleRate`, every Unity or game member it uses is one
+Local Coop already calls. Those six were checked against Unity 6000.0's assemblies, and each is
+isolated so a failure only disables its own feature.
+
+## Test
+
+```sh
+dotnet build test/FakeHost/FakeHost.csproj -c Release -o out/fakehost
+cd test && npm install && node e2e.mjs
+```
+
+`FakeHost` runs the networking core outside the game with synthetic 1080p frames and a test tone.
+`e2e.mjs` drives the guest page in headless Chromium and checks 24 things. They include the picture
+and its orientation, frame rate, keyboard, mouse and turn-aim input reaching the host, the
+auto-shoot toggle, decoding of the audio test tones, spectators, wrong codes, taking over P2 and
+reloading the page.
+
+## Limits
+
+- Tested outside the game only. The in-game parts can't be exercised without BALL x PIT (capture,
+  audio tap, the P2 bridge and the panel). They are written to fail soft and log to
+  `BepInEx/LogOutput.log`.
+- It streams the host's screen, so the guest sees what the host sees. Menus and level-ups stay with
+  the host.
+- Picture quality is limited by the host's upload. Expect roughly 5–15 Mbit/s at 960×540 and 30 fps.
