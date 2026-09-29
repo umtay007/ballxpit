@@ -31,10 +31,13 @@ internal enum SyncTestMode { Record, Check }
 internal static class SyncTest
 {
     public const int TestSeed = 20260929;
-    /// <summary>2: random number generators are fingerprinted by their whole state (1 read nothing).</summary>
-    private const int RecordingFormat = 2;
+    /// <summary>
+    /// 3: frame 0 is when the fight starts with P2 released from its walk-in and the extra random
+    /// number generators reseeded. 2: generators fingerprinted by their whole state. 1 read nothing.
+    /// </summary>
+    private const int RecordingFormat = 3;
     public const int TestFrames = 60 * FixedFrameClock.FramesPerSecond;
-    private const int FramesAfterMismatch = 3 * FixedFrameClock.FramesPerSecond;
+    private const int MaxWaitForPlayerTwo = 2 * FixedFrameClock.FramesPerSecond;
     private const int MaxStartFrames = 180 * FixedFrameClock.FramesPerSecond;
 
     private enum Phase { Off, WaitingForRun, Starting, Running, Done }
@@ -56,7 +59,9 @@ internal static class SyncTest
     private static GameState _lastState = GameState.kNum;
     private static int _firstMismatch = -1;
     private static int _mismatchedFrames;
-    private static string _firstMismatchText = "";
+    /// <summary>For each part of the game (enemies, balls, ...): the first frame it differed, and how.</summary>
+    private static readonly Dictionary<string, (int Frame, string Text)> GroupMismatch = new();
+    private static int _waitedForPlayerTwo;
     private static string _endReason = "";
 
     private static string _status = "";
@@ -109,7 +114,8 @@ internal static class SyncTest
         _lastState = GameState.kNum;
         _firstMismatch = -1;
         _mismatchedFrames = 0;
-        _firstMismatchText = "";
+        GroupMismatch.Clear();
+        _waitedForPlayerTwo = 0;
         _endReason = "";
         _saveWhenArmed = BattleSaveData.I?.Pointer ?? IntPtr.Zero;
         _phase = Phase.WaitingForRun;
@@ -214,7 +220,52 @@ internal static class SyncTest
             save.Seed = TestSeed;
             _seedForced = true;
         }
+        else
+        {
+            Plugin.Logger.LogWarning("Sync test: there's no run data yet to fix the seed in.");
+        }
         EngineCalls.InitRandom(TestSeed);
+    }
+
+    /// <summary>
+    /// The level's extra generators (effects and the like) get used every frame, also while the level
+    /// loads, which takes a frame or two more or less each time: reseed them when the fight starts.
+    /// </summary>
+    private static void ReseedExtraRandom()
+    {
+        GridMgr grid = GridMgr.I;
+        if (grid != null) grid.MiscRnd = new Il2CppSystem.Random(TestSeed + 1);
+        ThreadSafeRandom._global = new Il2CppSystem.Random(TestSeed + 2);
+        ThreadSafeRandom._local = new Il2CppSystem.Random(TestSeed + 3);
+        EngineCalls.InitRandom(TestSeed + 4);
+    }
+
+    // Local Coop creates P2 on a quarter-second scan and then lets it walk in behind P1 for about a
+    // second: both land on different frames from run to run. While the test run loads, P2 is looked
+    // for every frame and kept walking in; the fight's first frame releases it.
+    private static void HoldPlayerTwoIntro()
+    {
+        PlayerTwoController controller = PlayerTwoController._instance;
+        if (controller == null) return;
+        controller._nextScanTime = 0f;
+        if (controller._playerTwo == null) return;
+        float now = Time.unscaledTime;
+        controller._isFollowingIntro = true;
+        controller._introStartedAt = now;
+        controller._introStableSince = now;
+        controller._introObservedPlayerOneMovement = false;
+    }
+
+    private static bool PlayerTwoExpected => PlayerTwoController._instance != null;
+
+    private static bool PlayerTwoReady => PlayerTwoController._instance?._playerTwo != null;
+
+    private static void ReleasePlayerTwoIntro()
+    {
+        PlayerTwoController controller = PlayerTwoController._instance;
+        if (controller == null || controller._playerTwo == null || !controller._isFollowingIntro) return;
+        controller._isFollowingIntro = false;
+        controller.ApplyPlayerTwoMovementOverrides(false);
     }
 
     /// <summary>Reseed the level's other random number generators, in case they were seeded from the clock.</summary>
@@ -312,6 +363,7 @@ internal static class SyncTest
                     break;
                 case Phase.Starting:
                     WaitForPlay();
+                    if (_phase == Phase.Starting) HoldPlayerTwoIntro();
                     break;
                 case Phase.Running:
                     RunFrame();
@@ -350,12 +402,18 @@ internal static class SyncTest
             if (++_startFrames > MaxStartFrames) Finish("the run didn't start within 3 minutes");
             return;
         }
+        // The fight has begun; with Local Coop, wait (briefly) for P2 so both start together.
+        if (PlayerTwoExpected && !PlayerTwoReady && ++_waitedForPlayerTwo <= MaxWaitForPlayerTwo) return;
+        ReleasePlayerTwoIntro();
+        ReseedExtraRandom();
+        _stabilized = true;
         TimeMgr time = TimeMgr.I;
         _gameTimeAtStart = time != null ? time._gameTime : 0;
         _physicsTimeAtStart = time != null ? time._physicsTime : 0;
         _setup = SyncProbe.Setup();
         _phase = Phase.Running;
-        Plugin.Logger.LogInfo($"Sync test: playing after {_startFrames} loading frames. Setup: "
+        Plugin.Logger.LogInfo($"Sync test: playing after {_startFrames} loading frames"
+            + (_waitedForPlayerTwo > 0 ? $" and {_waitedForPlayerTwo} frames waiting for P2" : "") + ". Setup: "
             + string.Join("; ", _setup.Where(s => !s.Name.StartsWith("stat ", StringComparison.Ordinal)).Select(s => $"{s.Name}={s.Value}")));
 
         if (_reference != null)
@@ -396,44 +454,41 @@ internal static class SyncTest
                 Finish($"the recording ends here (it stopped because {_reference.EndReason})");
                 return;
             }
-            string? difference = Compare(_reference.Frames[index], sample);
-            if (difference != null)
+            List<(string Group, string Text)> differences = Compare(_reference.Frames[index], sample);
+            if (differences.Count > 0)
             {
                 _mismatchedFrames++;
-                if (_firstMismatch < 0)
+                if (_firstMismatch < 0) _firstMismatch = index;
+                foreach (var (group, text) in differences)
                 {
-                    _firstMismatch = index;
-                    _firstMismatchText = difference;
-                    Plugin.Logger.LogWarning($"Sync test: frame {index} differs: {difference}");
+                    if (GroupMismatch.ContainsKey(group)) continue;
+                    GroupMismatch[group] = (index, text);
+                    Plugin.Logger.LogWarning($"Sync test: {group} first differ at frame {index}: {text}");
                 }
             }
-            if (_firstMismatch >= 0 && index - _firstMismatch >= FramesAfterMismatch)
-            {
-                Finish("it had already gone out of sync");
-                return;
-            }
         }
+        // Keeps going after a difference: which parts drift, and which stay together, is the point.
         int limit = _reference?.Frames.Count ?? TestFrames;
-        _status = _firstMismatch >= 0
-            ? $"Out of sync at {Seconds(_firstMismatch)} s. Finishing..."
-            : $"Test run: {Seconds(index)} s of {Seconds(limit)} s, hands off" + (_reference != null ? ", in sync so far" : "");
+        _status = $"Test run: {Seconds(index)} s of {Seconds(limit)} s, hands off"
+            + (_reference == null ? "" : _firstMismatch < 0 ? ", in sync so far" : $", {GroupMismatch.Count} part(s) differ so far");
         if (Frames.Count >= limit) Finish(_reference != null ? "it reached the end of the recording" : "a minute had passed");
     }
 
-    /// <summary>Null when the frames match; otherwise the differing values, grouped.</summary>
-    private static string? Compare(double[] expected, double[] actual)
+    /// <summary>The parts of the game whose values differ between the frames, each with how.</summary>
+    private static List<(string Group, string Text)> Compare(double[] expected, double[] actual)
     {
-        var groups = new List<string>();
-        var seen = new HashSet<string>();
+        var byGroup = new List<(string Group, string Text)>();
         int n = Math.Min(expected.Length, actual.Length);
         for (int i = 0; i < n; i++)
         {
             if (Math.Abs(expected[i] - actual[i]) <= SyncProbe.Tolerance[i]) continue;
             string group = SyncProbe.Groups[i];
-            if (!seen.Add(group + SyncProbe.Names[i])) continue;
-            groups.Add($"{group}: {SyncProbe.Names[i]} {Format(actual[i])} here, {Format(expected[i])} in the recording");
+            string text = $"{SyncProbe.Names[i]} {Format(actual[i])} here, {Format(expected[i])} in the recording";
+            int at = byGroup.FindIndex(g => g.Group == group);
+            if (at < 0) byGroup.Add((group, text));
+            else byGroup[at] = (group, byGroup[at].Text + ", " + text);
         }
-        return groups.Count == 0 ? null : string.Join("; ", groups.Take(6));
+        return byGroup;
     }
 
     private static string Format(double v) =>
@@ -487,9 +542,14 @@ internal static class SyncTest
             }
             else
             {
-                _status = $"OUT OF SYNC after {Seconds(_firstMismatch)} s (frame {_firstMismatch}); everything before that matched.{caveat}";
+                _status = $"OUT OF SYNC: first difference after {Seconds(_firstMismatch)} s of {Seconds(Frames.Count)} s.{caveat}";
                 ReportLines.Add(_status);
-                foreach (string part in _firstMismatchText.Split("; ")) ReportLines.Add("  " + part);
+                foreach (string group in SyncProbe.Groups.Distinct())
+                {
+                    ReportLines.Add(GroupMismatch.TryGetValue(group, out var m)
+                        ? $"  {group}: differ from {Seconds(m.Frame)} s ({m.Text})"
+                        : $"  {group}: in sync the whole time");
+                }
             }
             foreach (string line in _reference!.SetupDifferences(_setup).Take(6)) ReportLines.Add("Setup: " + line);
         }
@@ -505,19 +565,22 @@ internal static class SyncTest
             var sb = new StringBuilder();
             sb.AppendLine($"BALLxPIT Online Co-op {Plugin.PluginVersion} sync test, {DateTime.Now:yyyy-MM-dd HH:mm}, mode {_mode}");
             foreach (string line in ReportLines) sb.AppendLine(line);
-            sb.AppendLine($"Ended because: {reason}. Frames: {Frames.Count}. Loading frames: {_startFrames}. Mismatched frames: {_mismatchedFrames}.");
+            sb.AppendLine($"Ended because: {reason}. Frames: {Frames.Count}. Loading frames: {_startFrames}. Waited for P2: {_waitedForPlayerTwo}. Mismatched frames: {_mismatchedFrames}.");
             sb.AppendLine($"Seed fixed: {_seedForced}. Random numbers reseeded: {_stabilized}. Clock fixed: {_clockFixed}.");
             sb.AppendLine("Setup here:");
             foreach (var (name, value) in _setup) sb.AppendLine($"  {name} = {value}");
-            if (_firstMismatch >= 0 && _reference != null)
+            // The frames around where each part first drifted (at most four places).
+            Recording? reference = _reference;
+            var starts = reference == null ? new List<int>() : GroupMismatch.Values.Select(m => m.Frame).Distinct().OrderBy(f => f).Take(4).ToList();
+            foreach (int start in starts)
             {
-                sb.AppendLine("Frames around the first difference (here / recording):");
-                for (int f = Math.Max(0, _firstMismatch - 2); f <= Math.Min(Frames.Count - 1, _firstMismatch + 5); f++)
+                sb.AppendLine($"Frames around {Seconds(start)} s (here / recording):");
+                for (int f = Math.Max(0, start - 2); f <= Math.Min(Frames.Count - 1, start + 3); f++)
                 {
                     sb.AppendLine($"  frame {f}:");
                     for (int i = 0; i < SyncProbe.Names.Length; i++)
                     {
-                        double a = Frames[f][i], b = f < _reference.Frames.Count ? _reference.Frames[f][i] : double.NaN;
+                        double a = Frames[f][i], b = f < reference!.Frames.Count ? reference.Frames[f][i] : double.NaN;
                         sb.AppendLine($"    {SyncProbe.Names[i],-24} {Format(a),16} {Format(b),16}{(Math.Abs(a - b) > SyncProbe.Tolerance[i] ? "  <--" : "")}");
                     }
                 }

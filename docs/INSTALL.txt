@@ -1,4 +1,4 @@
-BALLxPIT Online Co-op 0.1.7
+BALLxPIT Online Co-op 0.1.8
 ===========================
 Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
