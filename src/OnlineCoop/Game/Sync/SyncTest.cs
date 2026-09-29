@@ -31,6 +31,8 @@ internal enum SyncTestMode { Record, Check }
 internal static class SyncTest
 {
     public const int TestSeed = 20260929;
+    /// <summary>2: random number generators are fingerprinted by their whole state (1 read nothing).</summary>
+    private const int RecordingFormat = 2;
     public const int TestFrames = 60 * FixedFrameClock.FramesPerSecond;
     private const int FramesAfterMismatch = 3 * FixedFrameClock.FramesPerSecond;
     private const int MaxStartFrames = 180 * FixedFrameClock.FramesPerSecond;
@@ -48,8 +50,10 @@ internal static class SyncTest
     private static int _startFrames;
     private static int _stepsThisFrame;
     private static double _gameTimeAtStart, _physicsTimeAtStart;
-    private static bool _seedForced, _stabilized, _clockFixed;
+    private static bool _seedForced, _stabilized, _clockFixed, _gridSeeded;
     private static IntPtr _saveWhenArmed;
+    private static bool _sawLevelLoad;
+    private static GameState _lastState = GameState.kNum;
     private static int _firstMismatch = -1;
     private static int _mismatchedFrames;
     private static string _firstMismatchText = "";
@@ -100,7 +104,9 @@ internal static class SyncTest
         _setup = new();
         _startFrames = 0;
         _stepsThisFrame = 0;
-        _seedForced = _stabilized = _clockFixed = false;
+        _seedForced = _stabilized = _clockFixed = _gridSeeded = false;
+        _sawLevelLoad = false;
+        _lastState = GameState.kNum;
         _firstMismatch = -1;
         _mismatchedFrames = 0;
         _firstMismatchText = "";
@@ -108,8 +114,8 @@ internal static class SyncTest
         _saveWhenArmed = BattleSaveData.I?.Pointer ?? IntPtr.Zero;
         _phase = Phase.WaitingForRun;
         _status = mode == SyncTestMode.Record
-            ? "Start a NEW run now (any character and level). Then don't touch anything for a minute."
-            : $"Start a NEW run with {_reference!.Describe()}. Then don't touch anything for a minute.";
+            ? "Start a new run (any character and level) or restart one. Then don't touch anything for a minute."
+            : $"Start or restart a run with {_reference!.Describe()}. Then don't touch anything for a minute.";
         Plugin.Logger.LogInfo($"Sync test ({mode}) armed.");
     }
 
@@ -142,6 +148,7 @@ internal static class SyncTest
             }
         }
         Patch(AccessTools.Method(typeof(GridMgr), "InitGrid", new[] { typeof(LoadMode) }), "GridMgr.InitGrid", nameof(InitGridPrefix), nameof(InitGridPostfix));
+        Patch(AccessTools.Method(typeof(SaveMgr), "StartNewGame", Type.EmptyTypes), "SaveMgr.StartNewGame", postfix: nameof(StartNewGamePostfix), required: false);
         Patch(AccessTools.Method(typeof(TimeMgr), "RunFixedUpdate", new[] { typeof(float) }), "TimeMgr.RunFixedUpdate", postfix: nameof(RunFixedUpdatePostfix), required: false);
         Patch(AccessTools.Method(typeof(InputMgr), "GetAxis", new[] { typeof(GameActionType) }), "InputMgr.GetAxis", nameof(GetAxisPrefix));
         Patch(AccessTools.Method(typeof(InputMgr), "IsBtnHeld", new[] { typeof(GameActionType) }), "InputMgr.IsBtnHeld", nameof(IsBtnHeldPrefix));
@@ -153,19 +160,40 @@ internal static class SyncTest
         return _patched;
     }
 
-    /// <summary>A new run is being laid out: fix its seed and the frame clock before anything is generated.</summary>
+    /// <summary>A new run was set up (from the menu, or a restart): fix its seed and the frame clock.</summary>
+    private static void StartNewGamePostfix()
+    {
+        if (_phase != Phase.WaitingForRun) return;
+        Plugin.Logger.LogInfo("Sync test: the game set up a new run.");
+        BeginRun(); // catches its own errors
+    }
+
+    /// <summary>
+    /// The level is being laid out: the seed must be fixed before anything is generated. A new game or a
+    /// restarted floor counts as a new run; loading a saved run doesn't.
+    /// </summary>
     private static void InitGridPrefix(LoadMode loadMode)
     {
         try
         {
-            if (_phase != Phase.WaitingForRun || loadMode != LoadMode.kNewGame) return;
-            BattleSaveData save = BattleSaveData.I;
-            if (save != null)
-            {
-                save.Seed = TestSeed;
-                _seedForced = true;
-            }
-            EngineCalls.InitRandom(TestSeed);
+            if (!IsActive) return;
+            Plugin.Logger.LogInfo($"Sync test: the game lays out a level ({loadMode}).");
+            if (loadMode is not (LoadMode.kNewGame or LoadMode.kResetFloor)) return;
+            if (_phase == Phase.WaitingForRun) BeginRun();
+            else if (_phase == Phase.Starting && !_gridSeeded) ForceSeed();
+            _gridSeeded = _phase == Phase.Starting;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Logger.LogError("Sync test (seed): " + ex);
+        }
+    }
+
+    private static void BeginRun()
+    {
+        try
+        {
+            ForceSeed();
             _clockFixed = FixedFrameClock.Engage();
             _phase = Phase.Starting;
             _startFrames = 0;
@@ -174,8 +202,19 @@ internal static class SyncTest
         }
         catch (Exception ex)
         {
-            Plugin.Logger.LogError("Sync test (seed): " + ex);
+            Plugin.Logger.LogError("Sync test (start): " + ex);
         }
+    }
+
+    private static void ForceSeed()
+    {
+        BattleSaveData save = BattleSaveData.I;
+        if (save != null)
+        {
+            save.Seed = TestSeed;
+            _seedForced = true;
+        }
+        EngineCalls.InitRandom(TestSeed);
     }
 
     /// <summary>Reseed the level's other random number generators, in case they were seeded from the clock.</summary>
@@ -183,7 +222,7 @@ internal static class SyncTest
     {
         try
         {
-            if (_phase != Phase.Starting || loadMode != LoadMode.kNewGame || _stabilized) return;
+            if (_phase != Phase.Starting || loadMode is not (LoadMode.kNewGame or LoadMode.kResetFloor) || _stabilized) return;
             GridMgr grid = GridMgr.I;
             if (grid != null) grid.MiscRnd = new Il2CppSystem.Random(TestSeed + 1);
             ThreadSafeRandom._global = new Il2CppSystem.Random(TestSeed + 2);
@@ -259,6 +298,13 @@ internal static class SyncTest
         if (!IsActive) return;
         try
         {
+            GameMgr gameMgr = GameMgr.I;
+            GameState now = gameMgr != null ? gameMgr.CurState : GameState.kNum;
+            if (now != _lastState)
+            {
+                Plugin.Logger.LogInfo($"Sync test: game state {_lastState} -> {now} ({_phase}).");
+                _lastState = now;
+            }
             switch (_phase)
             {
                 case Phase.WaitingForRun:
@@ -281,15 +327,16 @@ internal static class SyncTest
     }
 
     /// <summary>
-    /// If a new run reaches play without going through InitGrid, the test still runs, just without a
-    /// fixed seed. (Only once play has begun: while it loads, InitGrid may still be on its way.)
+    /// If a new run reaches play without the game's run-start calls being seen, the test still runs,
+    /// just without a fixed seed. (Only once play has begun: while it loads, they may still come.)
     /// </summary>
     private static void CheckForUnseededRun()
     {
         BattleSaveData save = BattleSaveData.I;
         GameMgr game = GameMgr.I;
-        if (save == null || game == null || save.Pointer == _saveWhenArmed) return;
-        if (game.CurState != GameState.kPlaying) return;
+        if (save == null || game == null) return;
+        if (game.CurState == GameState.kEnteringLvl) _sawLevelLoad = true;
+        if (game.CurState != GameState.kPlaying || (!_sawLevelLoad && save.Pointer == _saveWhenArmed)) return;
         _clockFixed = FixedFrameClock.Engage();
         _phase = Phase.Starting;
         Plugin.Logger.LogWarning("Sync test: the run started without the seed hook; its random seed isn't fixed.");
@@ -333,7 +380,7 @@ internal static class SyncTest
             {
                 GameState.kLevelUp or GameState.kBonusBall or GameState.kBonusPassive => "a level-up screen opened (the test covers the fight until then)",
                 GameState.kPaused => "the game was paused",
-                GameState.kGameOver or GameState.kRevive => "you died",
+                GameState.kGameOver or GameState.kRevive or GameState.kEndingGame => "the run ended (you died or finished)",
                 _ => $"the game left play ({state})",
             });
             return;
@@ -410,7 +457,8 @@ internal static class SyncTest
 
         if (Frames.Count == 0)
         {
-            _status = "Test stopped before the run began: " + reason + ".";
+            _status = "Test stopped before the run began: " + reason + "."
+                + (_startFrames == 0 && !_seedForced ? " It starts when you start a new run from the menu or restart one." : "");
             ReportLines.Add(_status);
         }
         else if (_mode == SyncTestMode.Record)
@@ -544,7 +592,7 @@ internal static class SyncTest
             using var stream = File.Create(path);
             using var json = new Utf8JsonWriter(stream);
             json.WriteStartObject();
-            json.WriteNumber("format", 1);
+            json.WriteNumber("format", RecordingFormat);
             json.WriteString("mod", Plugin.PluginVersion);
             json.WriteNumber("seed", TestSeed);
             json.WriteBoolean("seedForced", SeedForced);
@@ -580,7 +628,8 @@ internal static class SyncTest
             if (!File.Exists(path)) throw new FileNotFoundException("there is no recording yet; record one first (or put your friend's in the BepInEx folder)");
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllBytes(path));
             JsonElement root = doc.RootElement;
-            if (root.GetProperty("format").GetInt32() != 1) throw new InvalidDataException("it's from a different version of the test");
+            if (root.GetProperty("format").GetInt32() != RecordingFormat)
+                throw new InvalidDataException("it was made by an older version of the test; record a new one with this version (and send that one to your friend)");
             string[] names = root.GetProperty("names").EnumerateArray().Select(e => e.GetString() ?? "").ToArray();
             if (!names.SequenceEqual(SyncProbe.Names)) throw new InvalidDataException("it was made by a different version of the mod; record a new one with this version");
             var setup = root.GetProperty("setup").EnumerateArray()

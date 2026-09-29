@@ -5,66 +5,95 @@ using Il2CppInterop.Runtime;
 
 namespace BALLxPITOnlineCoop.Game.Sync;
 
-/// <summary>Reads IL2CPP object fields by name, for fields the interop assemblies don't expose.</summary>
+/// <summary>Reads IL2CPP objects' fields straight from memory, for fingerprints and the setup list.</summary>
 internal static unsafe class NativeFields
 {
-    private static readonly Dictionary<(IntPtr Class, string Name), int> Offsets = new();
-
-    /// <summary>Byte offset of an instance field, searching base classes too; -1 if there is none.</summary>
-    public static int Offset(IntPtr obj, string name)
-    {
-        if (obj == IntPtr.Zero) return -1;
-        IntPtr klass = IL2CPP.il2cpp_object_get_class(obj);
-        if (Offsets.TryGetValue((klass, name), out int cached)) return cached;
-        int offset = -1;
-        for (IntPtr k = klass; k != IntPtr.Zero; k = IL2CPP.il2cpp_class_get_parent(k))
-        {
-            IntPtr field = IL2CPP.il2cpp_class_get_field_from_name(k, name);
-            if (field == IntPtr.Zero) continue;
-            offset = (int)IL2CPP.il2cpp_field_get_offset(field);
-            break;
-        }
-        Offsets[(klass, name)] = offset;
-        return offset;
-    }
-
-    public static int ReadInt(IntPtr obj, string name, int fallback = 0)
-    {
-        int offset = Offset(obj, name);
-        return offset <= 0 ? fallback : *(int*)((byte*)obj + offset);
-    }
-
-    public static IntPtr ReadPointer(IntPtr obj, string name)
-    {
-        int offset = Offset(obj, name);
-        return offset <= 0 ? IntPtr.Zero : *(IntPtr*)((byte*)obj + offset);
-    }
-
     /// <summary>
-    /// A fingerprint of a System.Random: its whole seed array plus its two positions. Two generators
-    /// with the same fingerprint hand out the same numbers from here on.
+    /// A fingerprint of a random number generator's whole state, whatever the runtime calls its fields:
+    /// every number field, the contents of number arrays (the seed table), and the same for objects it
+    /// refers to (newer runtimes keep the state in a helper object). Addresses are never mixed in, as
+    /// they differ from run to run. Two generators with the same fingerprint hand out the same numbers.
     /// </summary>
-    public static uint RandomState(IntPtr random)
+    public static uint RandomState(IntPtr random) => random == IntPtr.Zero ? 0 : HashObject(random, 2);
+
+    private sealed record FieldLayout(int Offset, int Kind, int Size);
+
+    private static readonly Dictionary<IntPtr, FieldLayout[]> Layouts = new();
+
+    public static uint HashObject(IntPtr obj, int depth)
     {
-        if (random == IntPtr.Zero) return 0;
         uint hash = 2166136261;
-        void Mix(int v)
+        HashInto(obj, depth, ref hash);
+        return hash;
+    }
+
+    private static void Mix(ref uint hash, byte* data, int length)
+    {
+        unchecked
         {
-            unchecked
+            for (int i = 0; i < length; i++) hash = (hash ^ data[i]) * 16777619;
+        }
+    }
+
+    private static void HashInto(IntPtr obj, int depth, ref uint hash)
+    {
+        if (obj == IntPtr.Zero) return;
+        foreach (FieldLayout field in LayoutOf(IL2CPP.il2cpp_object_get_class(obj)))
+        {
+            byte* at = (byte*)obj + field.Offset;
+            if (field.Size > 0)
             {
-                hash = (hash ^ (uint)v) * 16777619;
+                Mix(ref hash, at, field.Size);
+            }
+            else if (field.Kind == 0x1d)
+            {
+                IntPtr array = *(IntPtr*)at;
+                if (array == IntPtr.Zero) continue;
+                IntPtr arrayClass = IL2CPP.il2cpp_object_get_class(array);
+                IntPtr elementClass = IL2CPP.il2cpp_class_get_element_class(arrayClass);
+                if (elementClass == IntPtr.Zero || !IL2CPP.il2cpp_class_is_valuetype(elementClass)) continue;
+                int elementSize = IL2CPP.il2cpp_class_array_element_size(arrayClass);
+                long bytes = (long)IL2CPP.il2cpp_array_length(array) * elementSize;
+                Mix(ref hash, (byte*)array + 4 * IntPtr.Size, (int)Math.Min(bytes, 4096));
+            }
+            else if (depth > 0)
+            {
+                HashInto(*(IntPtr*)at, depth - 1, ref hash);
             }
         }
-        Mix(ReadInt(random, "inext", -1));
-        Mix(ReadInt(random, "inextp", -1));
-        IntPtr array = ReadPointer(random, "SeedArray");
-        if (array != IntPtr.Zero)
+    }
+
+    /// <summary>Instance fields of a class and its bases: numbers with their size, arrays, and references to follow.</summary>
+    private static FieldLayout[] LayoutOf(IntPtr klass)
+    {
+        if (Layouts.TryGetValue(klass, out FieldLayout[]? cached)) return cached;
+        var fields = new List<FieldLayout>();
+        for (IntPtr k = klass; k != IntPtr.Zero; k = IL2CPP.il2cpp_class_get_parent(k))
         {
-            int length = (int)IL2CPP.il2cpp_array_length(array);
-            int* data = (int*)((byte*)array + 4 * IntPtr.Size);
-            for (int i = 0; i < length && i < 64; i++) Mix(data[i]);
+            IntPtr iter = IntPtr.Zero;
+            IntPtr field;
+            while ((field = IL2CPP.il2cpp_class_get_fields(k, ref iter)) != IntPtr.Zero)
+            {
+                int flags = IL2CPP.il2cpp_field_get_flags(field);
+                if ((flags & 0x10) != 0 || (flags & 0x40) != 0) continue;
+                int offset = (int)IL2CPP.il2cpp_field_get_offset(field);
+                if (offset <= 0) continue;
+                int kind = IL2CPP.il2cpp_type_get_type(IL2CPP.il2cpp_field_get_type(field));
+                int size = kind switch
+                {
+                    0x02 or 0x04 or 0x05 => 1,
+                    0x03 or 0x06 or 0x07 => 2,
+                    0x08 or 0x09 or 0x0c => 4,
+                    0x0a or 0x0b or 0x0d => 8,
+                    _ => 0,
+                };
+                // Numbers, number arrays, and references to plain objects; strings and the rest are skipped.
+                if (size > 0 || kind == 0x1d || kind == 0x12 || kind == 0x1c) fields.Add(new FieldLayout(offset, kind, size));
+            }
         }
-        return hash;
+        FieldLayout[] result = fields.ToArray();
+        Layouts[klass] = result;
+        return result;
     }
 
     /// <summary>Every number field declared on the object's class called <paramref name="className"/>, as text.</summary>

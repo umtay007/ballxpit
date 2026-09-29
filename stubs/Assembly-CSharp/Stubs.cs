@@ -223,6 +223,13 @@ public class GridMgr : MonoBehaviour
     public void InitGrid(LoadMode loadMode) => throw null;
 }
 
+public class SaveMgr : MonoBehaviour
+{
+    public SaveMgr(IntPtr pointer) : base(pointer) { }
+    public static SaveMgr I { get => throw null; set => throw null; }
+    public void StartNewGame() => throw null;
+}
+
 public class ThreadSafeRandom : Il2CppSystem.Object
 {
     public ThreadSafeRandom(IntPtr pointer) : base(pointer) { }
