@@ -86,6 +86,8 @@ in this repository.
 # dist/BALLxPITOnlineCoop.zip               the two mod DLLs, for a game that already has BepInEx 6
 # dist/BALLxPITOnlineCoop-with-BepInEx.zip  plus BepInEx 6.0.0-be.788 (IL2CPP, win-x64) with
 #                                           UnityLogListening off, as Unity 6 games need
+# dist/Install-BALLxPIT-OnlineCoop.bat      one-click installer: carries the first zip inside, finds
+#                                           the game through Steam and fetches BepInEx if missing
 ```
 
 The plugin compiles against BepInEx 6 be.788 / Il2CppInterop 1.5.3 (fetched by

@@ -53,3 +53,9 @@ cp -r dist/stage/. dist/stage-full/
 cp lib/.pkgs/BepInEx-LICENSE.txt dist/stage-full/BepInEx/LICENSE-BepInEx.txt
 (cd dist/stage-full && zip -qr ../BALLxPITOnlineCoop-with-BepInEx.zip .)
 echo "Built dist/BALLxPITOnlineCoop-with-BepInEx.zip"
+
+# One-click installer: a .bat that carries the mod zip inside, finds the game through Steam, installs
+# BepInEx when it is missing and puts the files in place.
+VERSION="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/OnlineCoop/OnlineCoop.csproj)"
+./installer/build-installer.sh dist/BALLxPITOnlineCoop.zip "$VERSION" dist/Install-BALLxPIT-OnlineCoop.bat
+echo "Built dist/Install-BALLxPIT-OnlineCoop.bat"

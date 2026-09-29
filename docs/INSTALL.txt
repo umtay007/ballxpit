@@ -9,6 +9,11 @@ Windows only.
 
 INSTALL (host only)
 -------------------
+The easy way: double-click Install-BALLxPIT-OnlineCoop.bat. It finds the game through Steam
+(or asks for the folder), downloads BepInEx if the game doesn't have it yet, puts the files below
+in place and sets older copies aside as .old. Then carry on with step 4. If Windows says "Windows
+protected your PC", click "More info" and "Run anyway". The steps below do the same by hand.
+
 1. Close the game.
 2. BepInEx 6, the mod loader (skip if your game already runs BepInEx 6; BepInEx 5 does not work
    with BALL x PIT). Download

@@ -1,0 +1,187 @@
+@echo off
+rem BALLxPIT Online Co-op @@VERSION@@ installer. Double-click it; it finds your BALL x PIT folder
+rem through Steam and puts the mod files in place. Everything it needs is inside this one file.
+setlocal
+title BALLxPIT Online Co-op @@VERSION@@ installer
+set "SELF=%~f0"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$t = [IO.File]::ReadAllText($env:SELF); $i = $t.IndexOf('#' + '#INSTALLER' + '#'); Invoke-Expression $t.Substring($i)"
+echo.
+pause
+exit /b
+
+##INSTALLER##
+# PowerShell part (works with the Windows PowerShell 5.1 that comes with Windows).
+$ErrorActionPreference = 'Stop'
+$version = '@@VERSION@@'
+$bepinexUrl = 'https://builds.bepinex.dev/projects/bepinex_be/788/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.788%2B5b766a3.zip'
+
+function Say($text, $color) {
+    if ($color) { Write-Host $text -ForegroundColor $color } else { Write-Host $text }
+}
+
+function Test-GameFolder($path) {
+    if (-not $path) { return $false }
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    if (-not (Test-Path -LiteralPath (Join-Path $path 'GameAssembly.dll'))) { return $false }
+    return [bool](Get-ChildItem -LiteralPath $path -Filter 'BALLxPIT*.exe' -ErrorAction SilentlyContinue)
+}
+
+function Find-GameFolder {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:BALLXPIT_DIR) { $candidates.Add($env:BALLXPIT_DIR) }
+    $steamRoots = @()
+    foreach ($key in @('HKCU:\Software\Valve\Steam', 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam', 'HKLM:\SOFTWARE\Valve\Steam')) {
+        try {
+            $values = Get-ItemProperty -Path $key -ErrorAction Stop
+            foreach ($name in @('SteamPath', 'InstallPath')) {
+                if ($values.$name) { $steamRoots += ($values.$name -replace '/', '\') }
+            }
+        } catch { }
+    }
+    $libraries = @()
+    foreach ($root in $steamRoots) {
+        $libraries += $root
+        $vdf = Join-Path $root 'steamapps\libraryfolders.vdf'
+        if (Test-Path -LiteralPath $vdf) {
+            $text = [IO.File]::ReadAllText($vdf)
+            foreach ($m in [regex]::Matches($text, '"path"\s+"([^"]+)"')) {
+                $libraries += $m.Groups[1].Value.Replace('\\', '\')
+            }
+        }
+    }
+    foreach ($library in $libraries) { $candidates.Add((Join-Path $library 'steamapps\common\BALLxPIT')) }
+    foreach ($drive in @('C', 'D', 'E', 'F', 'G', 'H')) {
+        $candidates.Add($drive + ':\SteamLibrary\steamapps\common\BALLxPIT')
+        $candidates.Add($drive + ':\Program Files (x86)\Steam\steamapps\common\BALLxPIT')
+        $candidates.Add($drive + ':\Steam\steamapps\common\BALLxPIT')
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-GameFolder $candidate) { return (Resolve-Path -LiteralPath $candidate).Path }
+    }
+    return $null
+}
+
+function Ask-GameFolder {
+    Say 'I could not find BALL x PIT through Steam.' Yellow
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dialog.Description = 'Pick your BALL x PIT folder (the one with BALLxPIT.exe in it)'
+        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $dialog.SelectedPath }
+    } catch { }
+    $answer = Read-Host 'Paste the path of your BALL x PIT folder (the one with BALLxPIT.exe)'
+    if ($answer) { return $answer.Trim('"', ' ') }
+    return $null
+}
+
+# Moves a file out of BepInEx's way (BepInEx would load a second copy) without deleting it.
+function Set-Aside($file) {
+    $target = $file + '.old'
+    $n = 1
+    while (Test-Path -LiteralPath $target) { $n++; $target = $file + '.old' + $n }
+    Move-Item -LiteralPath $file -Destination $target
+    Say ('  Set aside an older copy: ' + $file) DarkGray
+}
+
+$temp = $null
+try {
+    Say ('BALLxPIT Online Co-op ' + $version + ' installer') Yellow
+    Say ''
+
+    $game = Find-GameFolder
+    if (-not $game) { $game = Ask-GameFolder }
+    if (-not $game) { throw 'No game folder was picked.' }
+    if (-not (Test-GameFolder $game)) { throw ('That folder does not look like BALL x PIT (no BALLxPIT.exe and GameAssembly.dll): ' + $game) }
+    Say ('Game folder: ' + $game) Cyan
+
+    while (Get-Process -Name 'BALLxPIT*' -ErrorAction SilentlyContinue) {
+        Say 'BALL x PIT is running. Close the game, then press Enter here.' Yellow
+        [void](Read-Host)
+    }
+
+    # BepInEx 6 (IL2CPP) is the mod loader; install it if it is missing.
+    $bepinex = Join-Path $game 'BepInEx'
+    $hasLoader = (Test-Path -LiteralPath (Join-Path $game 'winhttp.dll')) -and (Test-Path -LiteralPath (Join-Path $bepinex 'core\BepInEx.Unity.IL2CPP.dll'))
+    if (-not $hasLoader) {
+        if (Test-Path -LiteralPath (Join-Path $bepinex 'core')) {
+            Say 'This game folder has a different BepInEx (not BepInEx 6 for IL2CPP), which does not work with BALL x PIT.' Yellow
+            $answer = Read-Host 'Install BepInEx 6.0.0-be.788 over it? Other mods may need updating. [y/N]'
+            if ($answer -notmatch '^[yY]') { throw 'Stopped: BepInEx 6 is needed.' }
+        }
+        Say 'Downloading BepInEx 6 (the mod loader, about 30 MB)...'
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $temp = Join-Path ([IO.Path]::GetTempPath()) ('ballxpit-coop-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $temp | Out-Null
+        $bepZip = Join-Path $temp 'bepinex.zip'
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $bepinexUrl -OutFile $bepZip -UseBasicParsing
+        Expand-Archive -LiteralPath $bepZip -DestinationPath $game -Force
+        Say '  BepInEx installed. The first game start after this takes a few minutes.' Green
+    }
+
+    # The mod files travel inside this installer.
+    $text = (Get-Variable -Name t -ValueOnly -ErrorAction SilentlyContinue)
+    if (-not $text) { $text = [IO.File]::ReadAllText($env:SELF) }
+    $match = [regex]::Match($text, '<#PAYLOAD\s+([A-Za-z0-9+/=\s]+?)\s*PAYLOAD#>')
+    if (-not $match.Success) { throw 'This installer file is damaged (no mod files inside). Download it again.' }
+    if (-not $temp) {
+        $temp = Join-Path ([IO.Path]::GetTempPath()) ('ballxpit-coop-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $temp | Out-Null
+    }
+    $modZip = Join-Path $temp 'mod.zip'
+    [IO.File]::WriteAllBytes($modZip, [Convert]::FromBase64String(($match.Groups[1].Value -replace '\s', '')))
+    $files = Join-Path $temp 'files'
+    Expand-Archive -LiteralPath $modZip -DestinationPath $files -Force
+
+    $plugins = Join-Path $bepinex 'plugins'
+    New-Item -ItemType Directory -Path (Join-Path $plugins 'BALLxPITOnlineCoop') -Force | Out-Null
+    $localCoop = Join-Path $plugins 'BALLxPITLocalCoop.dll'
+    $onlineCoop = Join-Path $plugins 'BALLxPITOnlineCoop\BALLxPITOnlineCoop.dll'
+    foreach ($old in @(Get-ChildItem -LiteralPath $plugins -Recurse -Filter 'BALLxPITLocalCoop.dll' -File)) {
+        if ($old.FullName -ne $localCoop) { Set-Aside $old.FullName }
+    }
+    foreach ($old in @(Get-ChildItem -LiteralPath $plugins -Recurse -Filter 'BALLxPITOnlineCoop.dll' -File)) {
+        if ($old.FullName -ne $onlineCoop) { Set-Aside $old.FullName }
+    }
+
+    Copy-Item -LiteralPath (Join-Path $files 'BepInEx\plugins\BALLxPITLocalCoop.dll') -Destination $localCoop -Force
+    Copy-Item -LiteralPath (Join-Path $files 'BepInEx\plugins\BALLxPITOnlineCoop\BALLxPITOnlineCoop.dll') -Destination $onlineCoop -Force
+    Copy-Item -LiteralPath (Join-Path $files 'BALLxPITOnlineCoop-README.txt') -Destination (Join-Path $game 'BALLxPITOnlineCoop-README.txt') -Force
+
+    # BALL x PIT (Unity 6) needs one BepInEx setting changed; keep the rest of an existing config.
+    $config = Join-Path $bepinex 'config\BepInEx.cfg'
+    New-Item -ItemType Directory -Path (Join-Path $bepinex 'config') -Force | Out-Null
+    if (-not (Test-Path -LiteralPath $config)) {
+        Copy-Item -LiteralPath (Join-Path $files 'BepInEx\config\BepInEx.cfg') -Destination $config
+    } elseif (-not ([IO.File]::ReadAllText($config) -match '(?m)^\s*UnityLogListening\s*=\s*false')) {
+        Copy-Item -LiteralPath $config -Destination ($config + '.bak') -Force
+        Copy-Item -LiteralPath (Join-Path $files 'BepInEx\config\BepInEx.cfg') -Destination $config -Force
+        Say '  Updated BepInEx.cfg for Unity 6 (your old one is BepInEx.cfg.bak).' DarkGray
+    }
+
+    # Check what landed matches what was packed.
+    foreach ($pair in @(@('BepInEx\plugins\BALLxPITLocalCoop.dll', $localCoop), @('BepInEx\plugins\BALLxPITOnlineCoop\BALLxPITOnlineCoop.dll', $onlineCoop))) {
+        $want = (Get-FileHash -LiteralPath (Join-Path $files $pair[0]) -Algorithm SHA256).Hash
+        $got = (Get-FileHash -LiteralPath $pair[1] -Algorithm SHA256).Hash
+        if ($want -ne $got) { throw ('Copying ' + $pair[1] + ' failed. Is the game or an antivirus holding it?') }
+    }
+
+    Say ''
+    Say ('Installed BALLxPIT Online Co-op ' + $version + '.') Green
+    Say ('  ' + $localCoop)
+    Say ('  ' + $onlineCoop)
+    Say 'Start BALL x PIT and press F8 in the game.' Green
+}
+catch {
+    Say ''
+    Say ('Install failed: ' + $_.Exception.Message) Red
+    Say 'Nothing was deleted. Send a screenshot of this window if you need help.' Red
+}
+finally {
+    if ($temp -and (Test-Path -LiteralPath $temp)) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+return
+
+<#PAYLOAD
+@@PAYLOAD@@
+PAYLOAD#>
