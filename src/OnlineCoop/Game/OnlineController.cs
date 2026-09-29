@@ -59,6 +59,7 @@ internal static class OnlineController
             Plugin.Logger.LogInfo(_panelVisible ? "Online co-op panel opened." : "Online co-op panel closed.");
         }
 
+        PlayerTwoLoadout.Update();
         PlayerTwoHealth.Update();
 
         OnlineHost? host = _host;
@@ -69,6 +70,9 @@ internal static class OnlineController
         try
         {
             if (server.TakeAutoShootToggles() % 2 == 1) PlayerTwoBridge.ToggleAutoShoot();
+            if (server.TakePick(out int offerId, out int pickIndex)) PlayerTwoLoadout.RequestPick(offerId, pickIndex);
+            string? loadout = PlayerTwoLoadout.TakeJson();
+            if (loadout != null) server.SetLoadout(loadout);
             if (now >= _nextStatus)
             {
                 _nextStatus = now + 0.5f;
@@ -156,6 +160,7 @@ internal static class OnlineController
             }
             _host = host;
             PlayerTwoBridge.SetServer(host.Server);
+            PlayerTwoLoadout.ResendJson();
             if (OnlineConfig.StreamAudio.Value && FmodTap.TryInstall()) FmodTap.Target = host.Audio;
             else AudioTap.Target = host.Audio;
             _tapCamera = null;
@@ -287,7 +292,7 @@ internal static class OnlineController
             }
             PlayerTwoHealth.DrawLabel();
             if (_panelVisible) DrawPanel();
-            else if (IsHosting || (OnlineConfig.ShowMenuButton.Value && !PlayerTwoBridge.IsPlayerTwoActive())) DrawBadge();
+            else if (IsHosting || PlayerTwoLoadout.Offer != null || (OnlineConfig.ShowMenuButton.Value && !PlayerTwoBridge.IsPlayerTwoActive())) DrawBadge();
         }
         catch (Exception ex)
         {
@@ -304,6 +309,9 @@ internal static class OnlineController
         string text = server == null ? $"Online Co-op ({OnlineConfig.PanelKey.Value})"
             : guests == 0 ? $"Online: waiting ({OnlineConfig.PanelKey.Value})"
             : $"Online: {guests} connected ({OnlineConfig.PanelKey.Value})";
+        // Without a guest to pick on their page, the host picks P2's upgrades in the panel.
+        if (PlayerTwoLoadout.Offer != null && (server == null || !server.HasPlayer))
+            text = $"P2 level-up: pick in the panel ({OnlineConfig.PanelKey.Value})";
         if (GUI.Button(new Rect(Screen.width - 260 - PanelMargin, PanelMargin, 260, RowHeight), text)) _panelVisible = true;
     }
 
@@ -323,6 +331,26 @@ internal static class OnlineController
         if (Row($"BALL x PIT Online Co-op  ·  {OnlineConfig.PanelKey.Value} hides this")) _panelVisible = false;
         if (!PlayerTwoBridge.HooksInstalled)
             Row("! Your BALLxPITLocalCoop.dll is the original: guests can watch but not play. Use the one from this download.");
+
+        if (PlayerTwoLoadout.Enabled && PlayerTwoBridge.IsPlayerTwoActive() && PlayerTwoLoadout.Balls.Count > 0)
+        {
+            Row($"P2's balls: {PlayerTwoLoadout.DescribeBalls()}   ·   passives: {PlayerTwoLoadout.DescribePassives()}");
+            IReadOnlyList<LoadoutChoice>? offer = PlayerTwoLoadout.Offer;
+            if (offer != null)
+            {
+                int more = PlayerTwoLoadout.PicksWaiting - 1;
+                Row(PlayerTwoLoadout.WaitingForLevelUpScreen
+                    ? "P2's pick is applied when your level-up screen closes."
+                    : $"P2 level-up{(more > 0 ? $" (+{more} more)" : "")}: your friend picks on their page, or click one for P2:");
+                float cell = (width - (offer.Count - 1) * RowGap) / offer.Count;
+                for (int i = 0; i < offer.Count; i++)
+                {
+                    if (GUI.Button(new Rect(x + i * (cell + RowGap), y, cell, RowHeight), offer[i].Label))
+                        PlayerTwoLoadout.PickFromPanel(i);
+                }
+                y += RowHeight + RowGap;
+            }
+        }
 
         OnlineHost? host = _host;
         HostServer? server = host?.Server;

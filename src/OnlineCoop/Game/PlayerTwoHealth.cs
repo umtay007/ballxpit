@@ -217,6 +217,8 @@ internal static class PlayerTwoHealth
 
     private static float CurrentMaxHealth()
     {
+        // With its own balls and passives P2 has its own max health too.
+        if (PlayerTwoLoadout.StatsReady) return PlayerTwoLoadout.MaxHealth;
         UpgradeMgr upgrades = UpgradeMgr.I;
         return upgrades == null ? 0f : upgrades.MaxHealth;
     }
@@ -258,6 +260,7 @@ internal static class PlayerTwoHealth
         Vector3 screen = cam.WorldToScreenPoint(NativePlayerContext.GetPlayerPosition(p2));
         if (screen.z < 0) return;
         string text = _downed ? $"P2 DOWN {Math.Ceiling(DownedSecondsLeft):0}s" : $"P2 {Math.Ceiling(_health):0}/{_max:0}";
-        GUI.Button(new Rect(screen.x - 60f, Screen.height - screen.y - 90f, 120f, 22f), text);
+        if (PlayerTwoLoadout.PicksWaiting > 0) text += " LV UP";
+        GUI.Button(new Rect(screen.x - 75f, Screen.height - screen.y - 90f, 150f, 22f), text);
     }
 }

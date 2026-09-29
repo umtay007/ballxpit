@@ -127,6 +127,14 @@ namespace UnityEngine
         public Rect(float x, float y, float width, float height) => throw null;
     }
 
+    public struct Color
+    {
+        public float r;
+        public float g;
+        public float b;
+        public float a;
+    }
+
     public struct Vector2
     {
         public float x;

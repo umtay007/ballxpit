@@ -41,6 +41,16 @@ controller. Players install it with [docs/INSTALL.txt](docs/INSTALL.txt).
   `BattleSaveData.CurHealth` while they run for P2 (first and last in the patch order, so Local
   Coop's game-over guard sees P2's value). At zero P2 is knocked out for a while: no movement (input
   bridge), no shots (hook version 2 in `RequestNativePlayerTwoShot`) and no damage.
+- **P2's own balls and level-ups.** Local Coop swaps P2's ball list into `BattleSaveData.Heroes`
+  while P2's code runs, but builds it from copies of P1's. Hook version 3 lets the add-on own that
+  list instead (`TakeOverPlayerTwoHeroes` at the top of `EnsureInventoryReady` and
+  `InvalidateForHeroChanges`), and tells it whenever Local Coop's P2 context starts or ends
+  (`OnInventoryContextChanged`). At those moments the add-on also swaps `BattleSaveData.Passives`
+  and `UpgradeMgr`'s derived numbers (every primitive instance field, found through IL2CPP's field
+  list and copied as raw memory, plus its cached `PassiveInst` references; `TgtXP` stays shared), so
+  P2's balls hit with P2's stats. P2's numbers come from the game's own `UpgradeMgr.CalculateStats`,
+  run inside P2's context. Each rise of `BattleSaveData.UpgradeLvl` gives P2 a pick, offered on the
+  guest page and in the panel and applied with `UpgradeMgr.ApplyUpgrade` inside P2's context.
 - **Host panel.** Press F8, or click the "Online Co-op" button in the top-right corner of the menus
   (it also shows that the plugin loaded). It's drawn with IMGUI's `GUI.Button`, the one IMGUI call
   Local Coop already relies on.

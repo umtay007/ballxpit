@@ -125,6 +125,33 @@ try {
   await page.keyboard.up('j');
   check(true, 'J turns the aim (direction mode)');
 
+  // ---- P2's own level-up picks ----
+  await page.waitForFunction(() => !document.getElementById('lvl').hidden, null, { timeout: 5000 });
+  const cards = await page.$$eval('#lvlCards .lvl-card', (b) => b.map((x) => x.textContent));
+  check(cards.length === 3 && /Bleed/.test(cards[0]) && /New ball/.test(cards[0]) && /Lv 2/.test(cards[1]), `three level-up choices show (${cards.join(' | ')})`);
+  const kit = await page.textContent('#kit');
+  check(/Frost/.test(kit) && /Lv1/.test(kit), `P2's balls show in the corner ("${kit}")`);
+  check(/1 more/.test(await page.textContent('#lvlNote')), 'the tray says another pick is waiting');
+  mark = since();
+  await page.keyboard.press('1');
+  await waitFor((l) => l === 'PICK o=1 i=0', 3000, 'pick by key', mark);
+  check(true, 'pressing 1 sends the first choice to the host');
+  await page.waitForFunction(() => /Bleed/.test(document.getElementById('kit').textContent), null, { timeout: 3000 });
+  check(true, "the new ball shows up in P2's list");
+  const cards2 = await page.$$eval('#lvlCards .lvl-card', (b) => b.map((x) => x.textContent));
+  check(/Bleed/.test(cards2[0]) && /Lv 2/.test(cards2[0]) && (await page.$$('#lvlCards .lvl-card:disabled')).length === 0, `the next pick is offered right away (${cards2.join(' | ')})`);
+  mark = since();
+  await page.click('#lvlCards .lvl-card >> nth=2');
+  await waitFor((l) => l === 'PICK o=2 i=2', 3000, 'pick by click', mark);
+  await page.waitForFunction(() => document.getElementById('lvl').hidden, null, { timeout: 3000 });
+  check(true, 'clicking a card picks it; the tray closes when no picks are left');
+  const kit2 = await page.textContent('#kit');
+  check(/Magnet/.test(kit2) && /Bleed/.test(kit2), `the new passive shows up ("${kit2}")`);
+  mark = since();
+  await page.keyboard.press('2');
+  await sleep(300);
+  check(!linesAfter(mark).some((l) => l.startsWith('PICK')), 'number keys do nothing without a level-up waiting');
+
   // ---- audio ----
   await sleep(500);
   check(audioPackets.length > 0, `audio packets arrive (${audioPackets.length} captured)`);
@@ -152,6 +179,8 @@ try {
   check(true, 'second guest becomes a spectator while P2 is taken');
   await page2.waitForFunction(() => document.getElementById('waiting').hidden, null, { timeout: 8000 });
   check(true, 'spectator gets the picture too');
+  await page2.waitForFunction(() => /Magnet/.test(document.getElementById('kit').textContent), null, { timeout: 3000 });
+  check(true, "a guest who joins later sees P2's balls and passives");
 
   // ---- wrong code ----
   const page3 = await ctx2.newPage();

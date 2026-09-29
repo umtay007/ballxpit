@@ -38,7 +38,7 @@ namespace BALLxPITOnlineCoop
     {
         public const string PluginGuid = "ballxpit.onlinecoop";
         public const string PluginName = "BALLxPIT: Online Coop";
-        public const string PluginVersion = "0.1.3";
+        public const string PluginVersion = "0.1.4";
         public const string LocalCoopGuid = "sparrow.ballxpit.localcoop";
 
         private static readonly ConcurrentQueue<(Core.LogLevel Level, string Message)> PendingLogs = new();
@@ -57,7 +57,9 @@ namespace BALLxPITOnlineCoop
             OnlineConfig.Bind(config);
 
             PlayerTwoBridge.Install();
-            PlayerTwoHealth.Install(new HarmonyLib.Harmony(PluginGuid));
+            var harmony = new HarmonyLib.Harmony(PluginGuid);
+            PlayerTwoHealth.Install(harmony);
+            PlayerTwoLoadout.Install(harmony);
             try
             {
                 ClassInjector.RegisterTypeInIl2Cpp<OnlineCoopBehaviour>();

@@ -25,6 +25,7 @@ internal static class OnlineConfig
     public static ConfigEntry<int> DownedSeconds = null!;
     public static ConfigEntry<int> ReviveHealthPercent = null!;
     public static ConfigEntry<bool> SharedHealing = null!;
+    public static ConfigEntry<bool> SeparateLoadout = null!;
 
     public static void Bind(ConfigFile config)
     {
@@ -64,6 +65,9 @@ internal static class OnlineConfig
             new ConfigDescription("Health P2 gets back up with, in percent of max health.", new AcceptableValueRange<int>(1, 100)));
         SharedHealing = config.Bind("Co-op", "SharedHealing", true,
             "When you heal, P2 heals by the same amount (hearts may only be collectable by you).");
+        SeparateLoadout = config.Bind("Co-op", "SeparateLoadout", true,
+            "P2 has its own balls, passives and stats, and picks its own upgrade every time you level up (on the guest's "
+            + "page, or in this panel). Off: P2 uses copies of your balls, as in Local Coop. Works for online and local co-op.");
     }
 
     public static OnlineHostOptions ToOptions() => new()

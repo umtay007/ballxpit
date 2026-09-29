@@ -64,6 +64,36 @@
   #downed[hidden] { display: none; }
   .downed-card { text-align: center; background: #000b; border: 1px solid #ff6b6b66; border-radius: 12px; padding: 14px 22px; }
   .downed-title { font-size: 22px; font-weight: 700; color: var(--danger); }
+
+  #lvl { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(760px, calc(100% - 24px)); background: #0b0b10e6; border: 1px solid #ffcc3366; border-radius: 14px; padding: 10px 12px 12px; box-shadow: 0 10px 40px #000a; }
+  #lvl[hidden] { display: none; }
+  .lvl-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 8px; }
+  .lvl-title { font-weight: 700; color: var(--accent); }
+  .lvl-note { color: var(--muted); font-size: 13px; }
+  .lvl-cards { display: flex; gap: 8px; }
+  .lvl-card { flex: 1; min-width: 0; text-align: left; display: flex; gap: 9px; align-items: center; padding: 9px 10px; background: var(--panel-2); }
+  .lvl-card:hover:not(:disabled), .lvl-card.sel { border-color: var(--accent); }
+  .lvl-card:disabled { opacity: .55; cursor: default; }
+  .lvl-key { font: 12px ui-monospace, monospace; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; }
+  .lvl-text { min-width: 0; }
+  .lvl-name { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lvl-sub { font-size: 12px; color: var(--muted); }
+  .orb { flex: none; width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 0 2px #0006, 0 0 8px currentColor; }
+  .orb.passive { border-radius: 3px; transform: rotate(45deg); width: 11px; height: 11px; }
+  #kit { position: fixed; left: 10px; bottom: 10px; display: flex; flex-wrap: wrap; gap: 5px; max-width: 42%; font-size: 12px; pointer-events: none; opacity: .9; }
+  #kit[hidden] { display: none; }
+  #kit .chip { display: flex; gap: 6px; align-items: center; padding: 2px 8px 2px 6px; border-radius: 999px; background: #000a; border: 1px solid #fff2; white-space: nowrap; }
+  #kit .chip .orb { width: 9px; height: 9px; }
+  #kit .chip .orb.passive { width: 7px; height: 7px; }
+  #kit .lv { color: var(--accent); }
+  body.picking #kit { bottom: calc(var(--tray, 110px) + 24px); }
+  body.picking #toast { bottom: calc(var(--tray, 110px) + 26px); }
+  @media (max-width: 560px) {
+    .lvl-cards { flex-direction: column; gap: 6px; }
+    .lvl-card { padding: 7px 10px; }
+    .lvl-key { display: none; }
+    #kit { max-width: calc(100% - 20px); }
+  }
 </style>
 </head>
 <body>
@@ -110,14 +140,21 @@
       <tr><td>Aim</td><td>Point with the mouse · right stick · or hold <kbd>J</kbd>/<kbd>L</kbd> to turn</td></tr>
       <tr><td>Shoot</td><td>Hold left mouse or <kbd>Space</kbd> · <kbd>RT</kbd> or <kbd>A</kbd></td></tr>
       <tr><td>Auto-shoot on/off</td><td><kbd>E</kbd> or right-click · <kbd>Y</kbd></td></tr>
+      <tr><td>Pick a level-up</td><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> or click · D-pad then <kbd>X</kbd></td></tr>
       <tr><td>Full screen</td><td><kbd>F</kbd></td></tr>
       <tr><td>Sound on/off</td><td><kbd>M</kbd></td></tr>
       <tr><td>This help</td><td><kbd>H</kbd></td></tr>
     </table>
-    <p style="margin-top:14px">Menus, level-ups and pausing are done by the host. <span id="padNote"></span></p>
+    <p style="margin-top:14px">Menus and pausing are done by the host. Your balls and passives are your own: each time the team levels up, pick your upgrade at the bottom of the screen. <span id="padNote"></span></p>
     <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin:0 0 4px"><input type="checkbox" id="flipBox" style="width:auto"> Picture upside down? Flip it.</label>
     <div class="row"><button class="primary" id="helpClose">Back to the game</button></div>
   </div>
+</div>
+
+<div id="kit" hidden aria-label="P2's balls and passives"></div>
+<div id="lvl" hidden role="region" aria-label="Level-up">
+  <div class="lvl-head"><span class="lvl-title" id="lvlTitle">Level up!</span><span class="lvl-note" id="lvlNote"></span></div>
+  <div class="lvl-cards" id="lvlCards"></div>
 </div>
 
 <div id="toast" hidden role="status"></div>
@@ -244,6 +281,10 @@
         lastStatus = msg;
         updateStatus();
         break;
+      case 'loadout':
+        loadout = msg;
+        renderLoadout();
+        break;
       case 'pong':
         lastRtt = Math.round(performance.now() - msg.c);
         break;
@@ -273,6 +314,7 @@
     r.textContent = role === 'player' ? 'You are P2' : 'Watching';
     r.className = 'pill' + (role === 'player' ? ' role-player' : '');
     updateStatus();
+    renderLoadout();
   }
   function updateStatus() {
     const s = lastStatus;
@@ -294,6 +336,91 @@
     } else a.hidden = true;
   }
   $('claimBtn').addEventListener('click', () => send({ t: 'claim' }));
+
+  // ---------- P2's balls, passives and level-up picks ----------
+  let loadout = null;
+  let pickedOffer = -1;
+  let padSel = 0;
+  const safeColor = (c) => (/^#[0-9a-f]{6}$/i.test(c || '') ? c : '#ffffff');
+  function orb(item, passive) {
+    const o = document.createElement('span');
+    o.className = 'orb' + (passive ? ' passive' : '');
+    o.style.background = o.style.color = safeColor(item.color);
+    return o;
+  }
+  function renderLoadout() {
+    const l = loadout;
+    const kit = $('kit'), tray = $('lvl');
+    if (!l || !l.on || !role) { kit.hidden = true; tray.hidden = true; document.body.classList.remove('picking'); return; }
+
+    kit.replaceChildren();
+    const items = [...(l.balls || []).map((b) => [b, false]), ...(l.passives || []).map((p) => [p, true])];
+    for (const [item, passive] of items) {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      const name = document.createElement('span');
+      name.textContent = item.name;
+      const lv = document.createElement('span');
+      lv.className = 'lv';
+      lv.textContent = item.max ? 'MAX' : 'Lv' + item.lvl;
+      chip.append(orb(item, passive), name, lv);
+      kit.append(chip);
+    }
+    kit.hidden = items.length === 0;
+
+    const offer = l.offer;
+    tray.hidden = !offer;
+    document.body.classList.toggle('picking', !!offer);
+    if (!offer) { pickedOffer = -1; return; }
+    requestAnimationFrame(() => document.body.style.setProperty('--tray', tray.offsetHeight + 'px'));
+    const mine = role === 'player';
+    const picked = pickedOffer === offer.id;
+    $('lvlTitle').textContent = mine ? 'Level up! Pick one' : 'P2 is picking an upgrade';
+    const more = l.picks > 1 ? ` · ${l.picks - 1} more after this` : '';
+    $('lvlNote').textContent = (offer.wait ? 'applies when the host’s level-up screen closes'
+      : picked ? 'picked…'
+      : offer.kind === 'ball' ? 'bonus ball' : offer.kind === 'passive' ? 'bonus passive' : '') + more;
+    if (padSel >= offer.choices.length) padSel = 0;
+    const cards = $('lvlCards');
+    cards.replaceChildren();
+    offer.choices.forEach((c, i) => {
+      const b = document.createElement('button');
+      b.className = 'lvl-card' + (mine && i === padSel && padUsed ? ' sel' : '');
+      b.disabled = !mine || picked || offer.wait;
+      const key = document.createElement('span');
+      key.className = 'lvl-key';
+      key.textContent = String(i + 1);
+      const text = document.createElement('span');
+      text.className = 'lvl-text';
+      const name = document.createElement('div');
+      name.className = 'lvl-name';
+      name.textContent = c.name;
+      const sub = document.createElement('div');
+      sub.className = 'lvl-sub';
+      sub.textContent = c.new ? (c.ball ? 'New ball' : 'New passive') : `${c.ball ? 'Ball' : 'Passive'} → Lv ${c.lvl}`;
+      text.append(name, sub);
+      b.append(key, orb(c, !c.ball), text);
+      b.addEventListener('click', () => pick(i));
+      cards.append(b);
+    });
+  }
+  function pick(i) {
+    const offer = loadout && loadout.on && loadout.offer;
+    if (role !== 'player' || !offer || pickedOffer === offer.id || offer.wait || i < 0 || i >= offer.choices.length) return false;
+    pickedOffer = offer.id;
+    send({ t: 'pick', o: offer.id, i });
+    renderLoadout();
+    return true;
+  }
+  let padUsed = false;
+  function padPick(dir, confirm) {
+    const offer = loadout && loadout.on && loadout.offer;
+    if (!offer || role !== 'player') return;
+    padUsed = true;
+    if (dir) padSel = (padSel + dir + offer.choices.length) % offer.choices.length;
+    if (confirm) pick(padSel);
+    renderLoadout();
+  }
 
   setInterval(() => send({ t: 'ping', c: performance.now(), rtt: lastRtt }), 1000);
 
@@ -507,6 +634,8 @@
       if (e.code === 'KeyF') { toggleFullscreen(); return; }
       if (e.code === 'KeyM') { audio.start(); audio.toggleMute(); return; }
       if (e.code === 'Escape' && !$('help').hidden) { toggleHelp(); return; }
+      const digit = /^(Digit|Numpad)([1-5])$/.exec(e.code);
+      if (digit && !e.repeat && pick(+digit[2] - 1)) { e.preventDefault(); return; }
       if (GAME_KEYS.has(e.code)) e.preventDefault();
       if (e.repeat) return;
       if (e.code === 'KeyE') toggleAuto();
@@ -569,6 +698,10 @@
       padShoot = btn(7) || btn(0) || btn(5);
       const pressed = pad.buttons.map((b, i) => btn(i));
       if (pressed[3] && !padButtonsPrev[3]) toggleAuto();
+      // Level-up picks: D-pad left/right to choose, X to take it.
+      if (pressed[14] && !padButtonsPrev[14]) padPick(-1, false);
+      if (pressed[15] && !padButtonsPrev[15]) padPick(1, false);
+      if (pressed[2] && !padButtonsPrev[2]) padPick(0, true);
       padButtonsPrev = pressed;
     }
     window.addEventListener('gamepadconnected', () => toast('Controller connected.'));

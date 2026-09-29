@@ -73,6 +73,8 @@ public sealed class HostServer : IDisposable
     private int _autoShootToggles;
     private HostStatus _status;
     private int _nextSessionId;
+    private string _loadout = "";
+    private long _pick = -1;
 
     public HostServer(ServerOptions options, byte[] guestPage)
     {
@@ -154,6 +156,27 @@ public sealed class HostServer : IDisposable
         lock (_lock) _status = status;
     }
 
+    /// <summary>P2's balls, passives and level-up choices (a "loadout" message); sent to everyone now and to later joiners.</summary>
+    public void SetLoadout(string json)
+    {
+        lock (_lock)
+        {
+            if (json == _loadout) return;
+            _loadout = json;
+            foreach (Session s in _sessions)
+                if (s.Joined) s.EnqueueText(json);
+        }
+    }
+
+    /// <summary>The level-up choice the guest playing P2 clicked, if any since the last call.</summary>
+    public bool TakePick(out int offerId, out int index)
+    {
+        long pick = Interlocked.Exchange(ref _pick, -1);
+        offerId = pick < 0 ? 0 : (int)(pick >> 8);
+        index = pick < 0 ? 0 : (int)(pick & 0xff);
+        return pick >= 0;
+    }
+
     public List<GuestInfo> GetGuests()
     {
         lock (_lock)
@@ -168,6 +191,15 @@ public sealed class HostServer : IDisposable
                 Congested = s.Congested,
                 Diagnostics = s.Diagnostics,
             }).ToList();
+        }
+    }
+
+    /// <summary>Someone is playing P2.</summary>
+    public bool HasPlayer
+    {
+        get
+        {
+            lock (_lock) return _player != null;
         }
     }
 
@@ -461,6 +493,15 @@ public sealed class HostServer : IDisposable
             case "audio":
                 session.WantsAudio = GetFloat(root, "on") > 0.5f;
                 break;
+            case "pick":
+                lock (_lock)
+                {
+                    if (_player != session) break;
+                    long offer = (long)Clamp(GetFloat(root, "o"), 0, int.MaxValue);
+                    long index = (long)Clamp(GetFloat(root, "i"), 0, 16);
+                    Interlocked.Exchange(ref _pick, (offer << 8) | index);
+                }
+                break;
         }
         return true;
     }
@@ -520,6 +561,9 @@ public sealed class HostServer : IDisposable
         replaced?.Close();
 
         session.EnqueueText("{\"t\":\"welcome\",\"role\":\"" + role + "\",\"host\":" + JsonString(_options.HostName) + "}");
+        string loadout;
+        lock (_lock) loadout = _loadout;
+        if (loadout.Length > 0) session.EnqueueText(loadout);
         Log.Info($"{session.Name} joined from {session.Remote} as {(role == "player" ? "P2" : "a spectator")}.");
         return true;
     }

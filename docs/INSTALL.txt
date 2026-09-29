@@ -1,4 +1,4 @@
-BALLxPIT Online Co-op 0.1.3
+BALLxPIT Online Co-op 0.1.4
 ===========================
 Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
@@ -21,8 +21,8 @@ INSTALL (host only)
 3. Extract this zip into the same game folder, again without an extra folder, and allow it to
    overwrite files. It adds:
        BepInEx\plugins\BALLxPITLocalCoop.dll
-           sparrow's Local Coop 0.1.0 plus two small input hooks. It replaces the original and plays
-           exactly the same when nobody is online.
+           sparrow's Local Coop 0.1.0 plus a few small hooks for the online part. It replaces the
+           original. Replace it together with the other DLL whenever you update.
        BepInEx\plugins\BALLxPITOnlineCoop\BALLxPITOnlineCoop.dll
            The online part.
        BepInEx\config\BepInEx.cfg
@@ -49,7 +49,8 @@ HOST A GAME
 3. Send the link to your friend (Discord, text, anything). They open it in Chrome, Edge or
    Firefox, type a name and click "Join as Player 2". The code after # is the password, so only
    people you send the link to can get in.
-4. Start a run. Your friend now controls P2. You still do the menus, level-up picks and pausing.
+4. Start a run. Your friend now controls P2. You still do the menus, your own level-up picks and
+   pausing; your friend picks P2's upgrades on their page.
 
 Other links the panel can show:
   Direct link       http://your-ip:47777/...  Offered when your router accepts UPnP. A little less
@@ -71,12 +72,31 @@ co-op too. Settings are under [Co-op] in BepInEx/config/BALLxPITOnlineCoop.cfg: 
 DownedSeconds, ReviveHealthPercent, SharedHealing.
 
 
+P2'S OWN BALLS AND LEVEL-UPS
+----------------------------
+P2 has its own balls, passives and stats. At the start of a run P2 gets copies of what you start
+with. After that, whenever the team levels up (XP is shared), you pick your upgrade on the game's
+level-up screen as usual and P2 gets a pick of its own: a new ball, a ball upgrade, a new passive or
+a passive upgrade. Your friend picks at the bottom of their page. If nobody is on the page (local
+co-op, or your friend is busy), the F8 panel shows P2's choices and you can click one for P2. The
+panel also lists P2's balls and passives, and "LV UP" appears above P2 while a pick is waiting.
+Things to know:
+- P2's balls follow P2's passives and stats (damage, crit, speed, max health, ...), yours follow
+  yours.
+- P2 doesn't get fusions or evolutions yet; those stay on your level-up screen.
+- P2's pick is applied once your own level-up screen is closed.
+- Quitting and continuing a run later starts P2 over with copies of your current balls.
+Turn it off with SeparateLoadout = false under [Co-op] in the config; P2 then uses copies of your
+balls, as in plain Local Coop.
+
+
 YOUR FRIEND'S CONTROLS
 ----------------------
   Move                WASD or arrow keys, or the left stick
   Aim                 point with the mouse, the right stick, or hold J / L to turn
   Shoot               hold the left mouse button or Space, or RT / A
   Auto-shoot on/off   E or right-click, or Y
+  Pick a level-up     1 / 2 / 3 or click, or D-pad left/right then X
   Full screen         F        Sound on/off   M        Help   H
 
 
@@ -100,6 +120,8 @@ IF SOMETHING'S OFF
 - No game sound for your friend: the F8 panel has a "Sound:" line saying where it comes from.
   Set StreamAudio = false if the sound capture causes any trouble for you.
 - Game stutters for you while hosting: lower MaxFps in the config.
+- P2 never gets level-up picks, or P2's balls act strangely: set SeparateLoadout = false and send
+  BepInEx/LogOutput.log (look for lines starting with "P2").
 Everything the mod does is logged in BepInEx/LogOutput.log.
 
 Settings live in BepInEx/config/BALLxPITOnlineCoop.cfg (created on first start).

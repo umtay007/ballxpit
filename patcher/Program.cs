@@ -10,6 +10,11 @@
 //     movement and aim, so the add-on can put the guest's stick and aim into P2's fields.
 //   * RequestNativePlayerTwoShot first asks OnlineHooks.CanPlayerTwoShoot() (hooks version 2), so the
 //     add-on can stop a knocked-out P2 from shooting.
+//   * PlayerTwoHeroInventory (hooks version 3): EnsureInventoryReady and InvalidateForHeroChanges first
+//     ask OnlineHooks.TakeOverPlayerTwoHeroes(), so the add-on can give P2 its own ball list instead of
+//     copies of P1's; and Enter/ExitPlayerTwoInventory, RestorePlayerOneInventory and Reset call
+//     OnlineHooks.OnInventoryContextChanged() on the way out, so the add-on can swap P2's passives
+//     and stats in and out together with P2's balls.
 // The reference copy is the same assembly with every member made public, used only to compile the
 // add-on (which reaches the real private members at runtime through IgnoresAccessChecksTo).
 using Mono.Cecil;
@@ -24,7 +29,7 @@ if (args.Length != 3)
 
 const string HooksNamespace = "BALLxPITLocalCoop";
 const string HooksName = "OnlineHooks";
-const int HooksVersion = 2;
+const int HooksVersion = 3;
 
 try
 {
@@ -76,10 +81,24 @@ static void Patch(ModuleDefinition module)
     MethodDefinition requestShot = controller.Methods.SingleOrDefault(m => m.Name == "RequestNativePlayerTwoShot" && m.Parameters.Count == 1)
         ?? throw new PatchException("PlayerTwoController.RequestNativePlayerTwoShot(string) not found.");
 
+    TypeDefinition inventory = module.GetType("BALLxPITLocalCoop.PlayerTwoHeroInventory")
+        ?? throw new PatchException("PlayerTwoHeroInventory not found.");
+    MethodDefinition InventoryMethod(string name) =>
+        inventory.Methods.SingleOrDefault(m => m.Name == name && m.Parameters.Count == 0 && m.IsStatic && m.ReturnType.MetadataType == MetadataType.Void)
+        ?? throw new PatchException($"PlayerTwoHeroInventory.{name}() not found.");
+    MethodDefinition[] takeOverTargets = { InventoryMethod("EnsureInventoryReady"), InventoryMethod("InvalidateForHeroChanges") };
+    MethodDefinition[] contextTargets =
+    {
+        InventoryMethod("EnterPlayerTwoInventory"), InventoryMethod("ExitPlayerTwoInventory"),
+        InventoryMethod("RestorePlayerOneInventory"), InventoryMethod("Reset"),
+    };
+
     TypeDefinition hooks = BuildHooksType(module, controller, inputGetKey, keyCode);
     MethodDefinition hookGetKey = hooks.Methods.Single(m => m.Name == "GetKey");
     MethodDefinition hookBeforeApply = hooks.Methods.Single(m => m.Name == "OnBeforeApplyInput");
     MethodDefinition hookCanShoot = hooks.Methods.Single(m => m.Name == "CanPlayerTwoShoot");
+    MethodDefinition hookTakeOver = hooks.Methods.Single(m => m.Name == "TakeOverPlayerTwoHeroes");
+    MethodDefinition hookContextChanged = hooks.Methods.Single(m => m.Name == "OnInventoryContextChanged");
 
     // 1. Route P2's key reads through the hook.
     int redirected = 0;
@@ -161,7 +180,41 @@ static void Patch(ModuleDefinition module)
     shotIl.InsertBefore(first, shotIl.Create(OpCodes.Ret));
     shotBody.OptimizeMacros();
 
-    // 4. Mark the plugin so logs and BepInEx's duplicate check can tell the builds apart. A higher
+    // 4. Let the add-on own P2's ball list:
+    //        if (OnlineHooks.TakeOverPlayerTwoHeroes()) return;   at the top of each take-over target
+    foreach (MethodDefinition method in takeOverTargets)
+    {
+        MethodBody takeOverBody = method.Body;
+        takeOverBody.SimplifyMacros();
+        Instruction start = takeOverBody.Instructions[0];
+        if (takeOverBody.ExceptionHandlers.Any(h => h.TryStart == start || h.HandlerStart == start))
+            throw new PatchException($"{method.Name} starts inside an exception handler; its layout changed.");
+        ILProcessor takeOverIl = takeOverBody.GetILProcessor();
+        takeOverIl.InsertBefore(start, takeOverIl.Create(OpCodes.Call, hookTakeOver));
+        takeOverIl.InsertBefore(start, takeOverIl.Create(OpCodes.Brfalse, start));
+        takeOverIl.InsertBefore(start, takeOverIl.Create(OpCodes.Ret));
+        takeOverBody.OptimizeMacros();
+    }
+
+    // 5. Tell the add-on whenever P2's inventory context may have changed:
+    //        call OnlineHooks.OnInventoryContextChanged()   before every ret
+    int contextCalls = 0;
+    foreach (MethodDefinition method in contextTargets)
+    {
+        MethodBody contextBody = method.Body;
+        contextBody.SimplifyMacros();
+        ILProcessor contextIl = contextBody.GetILProcessor();
+        foreach (Instruction ret in contextBody.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+        {
+            Instruction call = contextIl.Create(OpCodes.Call, hookContextChanged);
+            contextIl.InsertBefore(ret, call);
+            Retarget(contextBody, ret, call);
+            contextCalls++;
+        }
+        contextBody.OptimizeMacros();
+    }
+
+    // 6. Mark the plugin so logs and BepInEx's duplicate check can tell the builds apart. A higher
     //    version makes BepInEx pick this copy if the original DLL is still installed.
     TypeDefinition plugin = module.GetType("BALLxPITLocalCoop.Plugin") ?? throw new PatchException("Plugin class not found.");
     CustomAttribute bepInPlugin = plugin.CustomAttributes.SingleOrDefault(a => a.AttributeType.FullName == "BepInEx.BepInPlugin")
@@ -170,11 +223,33 @@ static void Patch(ModuleDefinition module)
     if (oldVersion != "0.1.0")
         throw new PatchException($"this patcher is written for Local Coop 0.1.0, the file is {oldVersion}.");
     bepInPlugin.ConstructorArguments[1] = new CustomAttributeArgument(module.TypeSystem.String, "BALLxPIT: Local Coop (online-ready)");
-    bepInPlugin.ConstructorArguments[2] = new CustomAttributeArgument(module.TypeSystem.String, "0.1.1-online");
+    bepInPlugin.ConstructorArguments[2] = new CustomAttributeArgument(module.TypeSystem.String, "0.1.2-online");
 
     Console.WriteLine($"Redirected {redirected} Input.GetKey reads in PlayerTwoController ({string.Join(", ", methodsWithRedirect.OrderBy(n => n))}).");
     Console.WriteLine($"Inserted OnBeforeApplyInput in UpdatePlayerTwoInput; retargeted {retargeted} branch(es).");
     Console.WriteLine("Inserted CanPlayerTwoShoot at the top of RequestNativePlayerTwoShot.");
+    Console.WriteLine($"Inserted TakeOverPlayerTwoHeroes in {string.Join(", ", takeOverTargets.Select(m => m.Name))}.");
+    Console.WriteLine($"Inserted {contextCalls} OnInventoryContextChanged call(s) in {string.Join(", ", contextTargets.Select(m => m.Name))}.");
+}
+
+/// <summary>Points every branch, switch and handler boundary that targeted <paramref name="from"/> at <paramref name="to"/>.</summary>
+static void Retarget(MethodBody body, Instruction from, Instruction to)
+{
+    foreach (Instruction instruction in body.Instructions)
+    {
+        if (instruction.Operand == from) instruction.Operand = to;
+        else if (instruction.Operand is Instruction[] targets)
+        {
+            for (int i = 0; i < targets.Length; i++)
+                if (targets[i] == from) targets[i] = to;
+        }
+    }
+    foreach (ExceptionHandler handler in body.ExceptionHandlers)
+    {
+        if (handler.TryEnd == from) handler.TryEnd = to;
+        if (handler.HandlerEnd == from) handler.HandlerEnd = to;
+        if (handler.FilterStart == from) handler.FilterStart = to;
+    }
 }
 
 static bool IsInputGetKey(MethodReference r) =>
@@ -216,12 +291,20 @@ static TypeDefinition BuildHooksType(ModuleDefinition module, TypeDefinition con
     funcBool.GenericArguments.Add(module.TypeSystem.Boolean);
     var funcBoolInvoke = new MethodReference("Invoke", func1Open.GenericParameters[0], funcBool) { HasThis = true };
 
+    // Action
+    var action = new TypeReference("System", "Action", module, systemRuntime);
+    var actionPlainInvoke = new MethodReference("Invoke", module.TypeSystem.Void, action) { HasThis = true };
+
     var remoteKeyHeld = new FieldDefinition("RemoteKeyHeld", FieldAttributes.Public | FieldAttributes.Static, funcKeyBool);
     var allowShot = new FieldDefinition("AllowPlayerTwoShot", FieldAttributes.Public | FieldAttributes.Static, funcBool);
     hooks.Fields.Add(allowShot);
     var beforeApplyInput = new FieldDefinition("BeforeApplyInput", FieldAttributes.Public | FieldAttributes.Static, actionController);
     hooks.Fields.Add(remoteKeyHeld);
     hooks.Fields.Add(beforeApplyInput);
+    var ownsHeroes = new FieldDefinition("OwnsPlayerTwoHeroes", FieldAttributes.Public | FieldAttributes.Static, funcBool);
+    hooks.Fields.Add(ownsHeroes);
+    var contextChanged = new FieldDefinition("InventoryContextChanged", FieldAttributes.Public | FieldAttributes.Static, action);
+    hooks.Fields.Add(contextChanged);
 
     // public static int GetVersion() => HooksVersion;
     var getVersion = new MethodDefinition("GetVersion", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, module.TypeSystem.Int32);
@@ -301,6 +384,45 @@ static TypeDefinition BuildHooksType(ModuleDefinition module, TypeDefinition con
         il.Emit(OpCodes.Ret);
     }
     hooks.Methods.Add(canShoot);
+
+    // public static bool TakeOverPlayerTwoHeroes()
+    // {
+    //     Func<bool> owns = OwnsPlayerTwoHeroes;
+    //     return owns != null && owns();
+    // }
+    var takeOver = new MethodDefinition("TakeOverPlayerTwoHeroes", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, module.TypeSystem.Boolean);
+    {
+        ILProcessor il = takeOver.Body.GetILProcessor();
+        Instruction noCallback = il.Create(OpCodes.Pop);
+        il.Emit(OpCodes.Ldsfld, ownsHeroes);
+        il.Emit(OpCodes.Dup);
+        il.Emit(OpCodes.Brfalse, noCallback);
+        il.Emit(OpCodes.Callvirt, funcBoolInvoke);
+        il.Emit(OpCodes.Ret);
+        il.Append(noCallback);
+        il.Emit(OpCodes.Ldc_I4_0);
+        il.Emit(OpCodes.Ret);
+    }
+    hooks.Methods.Add(takeOver);
+
+    // public static void OnInventoryContextChanged()
+    // {
+    //     Action callback = InventoryContextChanged;
+    //     if (callback != null) callback();
+    // }
+    var onContextChanged = new MethodDefinition("OnInventoryContextChanged", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, module.TypeSystem.Void);
+    {
+        ILProcessor il = onContextChanged.Body.GetILProcessor();
+        Instruction noCallback = il.Create(OpCodes.Pop);
+        il.Emit(OpCodes.Ldsfld, contextChanged);
+        il.Emit(OpCodes.Dup);
+        il.Emit(OpCodes.Brfalse, noCallback);
+        il.Emit(OpCodes.Callvirt, actionPlainInvoke);
+        il.Emit(OpCodes.Ret);
+        il.Append(noCallback);
+        il.Emit(OpCodes.Ret);
+    }
+    hooks.Methods.Add(onContextChanged);
 
     foreach (MethodDefinition method in hooks.Methods)
         method.Body.OptimizeMacros();

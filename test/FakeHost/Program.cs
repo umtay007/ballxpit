@@ -60,6 +60,30 @@ for (int i = 0; i < backgrounds.Length; i++)
     backgrounds[i] = new byte[W * H * 4];
     Draw(backgrounds[i], W, H, detail, i * 7, -1000, -1000);
 }
+// A pretend P2 loadout with two level-ups waiting, in the plugin's "loadout" message format.
+var fakeBalls = new List<(string Name, string Color, int Lvl)> { ("Frost", "#7fd4ff", 1) };
+var fakePassives = new List<(string Name, string Color, int Lvl)>();
+int fakePicks = Environment.GetEnvironmentVariable("FAKEHOST_PICKS") is string pickCount ? int.Parse(pickCount, CultureInfo.InvariantCulture) : 2;
+int fakeOfferId = 1;
+var fakeChoices = new[] { ("Bleed", "#e0405a", true, true), ("Frost", "#7fd4ff", true, false), ("Magnet", "#c0c0ff", false, true) };
+string FakeLoadout()
+{
+    string Items(List<(string Name, string Color, int Lvl)> items) => string.Join(",", items.Select(i =>
+        FormattableString.Invariant($"{{\"name\":\"{i.Name}\",\"color\":\"{i.Color}\",\"lvl\":{i.Lvl},\"max\":{(i.Lvl >= 3 ? "true" : "false")}}}")));
+    string json = FormattableString.Invariant($"{{\"t\":\"loadout\",\"on\":true,\"picks\":{fakePicks},\"balls\":[{Items(fakeBalls)}],\"passives\":[{Items(fakePassives)}]");
+    if (fakePicks > 0)
+    {
+        json += FormattableString.Invariant($",\"offer\":{{\"id\":{fakeOfferId},\"kind\":\"any\",\"wait\":false,\"choices\":[")
+            + string.Join(",", fakeChoices.Select(c =>
+            {
+                int lvl = c.Item4 ? 1 : fakeBalls.Concat(fakePassives).FirstOrDefault(b => b.Name == c.Item1).Lvl + 1;
+                return FormattableString.Invariant($"{{\"name\":\"{c.Item1}\",\"ball\":{(c.Item3 ? "true" : "false")},\"new\":{(c.Item4 ? "true" : "false")},\"lvl\":{lvl},\"color\":\"{c.Item2}\"}}");
+            })) + "]}";
+    }
+    return json + "}";
+}
+server.SetLoadout(FakeLoadout());
+
 var started = DateTime.UtcNow;
 int frame = 0;
 GuestInput last = default;
@@ -85,6 +109,23 @@ while ((DateTime.UtcNow - started).TotalSeconds < runFor)
     }
     int toggles = server.TakeAutoShootToggles();
     if (toggles > 0) Console.WriteLine($"TOGGLE {toggles}");
+    if (server.TakePick(out int pickedOffer, out int pickedIndex))
+    {
+        Console.WriteLine($"PICK o={pickedOffer} i={pickedIndex}");
+        if (pickedOffer == fakeOfferId && fakePicks > 0 && pickedIndex < fakeChoices.Length)
+        {
+            var (name, color, ball, isNew) = fakeChoices[pickedIndex];
+            var list = ball ? fakeBalls : fakePassives;
+            int at = list.FindIndex(i => i.Name == name);
+            if (isNew && at < 0) list.Add((name, color, 1));
+            else if (at >= 0) list[at] = (name, color, list[at].Lvl + 1);
+            // The same three choices again, except what was just taken new comes back as an upgrade.
+            fakeChoices[pickedIndex] = (name, color, ball, false);
+            fakePicks--;
+            fakeOfferId++;
+            server.SetLoadout(FakeLoadout());
+        }
+    }
     // P2 at 75/100; FAKEHOST_DOWN=1 shows P2 knocked out instead.
     bool fakeDown = Environment.GetEnvironmentVariable("FAKEHOST_DOWN") == "1";
     server.SetHostStatus(new HostStatus
