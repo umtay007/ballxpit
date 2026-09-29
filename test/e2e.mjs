@@ -143,10 +143,24 @@ try {
   mark = since();
   await page.click('#lvlCards .lvl-card >> nth=2');
   await waitFor((l) => l === 'PICK o=2 i=2', 3000, 'pick by click', mark);
-  await page.waitForFunction(() => document.getElementById('lvl').hidden, null, { timeout: 3000 });
-  check(true, 'clicking a card picks it; the tray closes when no picks are left');
+  check(true, 'clicking a card picks it');
+  await page.waitForFunction(() => /Fuser/.test(document.getElementById('lvlTitle').textContent), null, { timeout: 3000 });
   const kit2 = await page.textContent('#kit');
   check(/Magnet/.test(kit2) && /Bleed/.test(kit2), `the new passive shows up ("${kit2}")`);
+
+  // ---- P2's own fuser ----
+  const fuserCards = await page.$$eval('#lvlCards .lvl-card', (b) => b.map((x) => x.textContent));
+  check(fuserCards.length === 3 && /Fission/.test(fuserCards[0]) && /upgrade levels/.test(fuserCards[0]) && /Fusion/.test(fuserCards[1]) && /Evolution/.test(fuserCards[2]),
+    `a fuser offers Fission, Fusion and Evolution (${fuserCards.join(' | ')})`);
+  mark = since();
+  await page.keyboard.press('1');
+  await waitFor((l) => l === 'PICK o=3 i=0', 3000, 'fuser pick', mark);
+  await page.waitForFunction(() => document.getElementById('lvl').hidden, null, { timeout: 3000 });
+  check(true, 'picking Fission sends it to the host; the tray closes when no picks are left');
+  await page.waitForFunction(() => /Fission/.test(document.getElementById('toast').textContent) && !document.getElementById('toast').hidden, null, { timeout: 3000 });
+  check(true, `what Fission gave shows up ("${await page.textContent('#toast')}")`);
+  const kit3 = await page.textContent('#kit');
+  check(/Frost\s*Lv2/.test(kit3.replace(/\s+/g, ' ')) || /FrostLv2/.test(kit3), `Fission's levels show in P2's list ("${kit3}")`);
   mark = since();
   await page.keyboard.press('2');
   await sleep(300);

@@ -1,4 +1,4 @@
-BALLxPIT Online Co-op 0.1.8
+BALLxPIT Online Co-op 0.1.9
 ===========================
 Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
@@ -79,19 +79,22 @@ co-op too. Settings are under [Co-op] in BepInEx/config/BALLxPITOnlineCoop.cfg: 
 DownedSeconds, ReviveHealthPercent, SharedHealing.
 
 
-P2'S OWN BALLS AND LEVEL-UPS
-----------------------------
+P2'S OWN BALLS, LEVEL-UPS AND FUSERS
+------------------------------------
 P2 has its own balls, passives and stats. At the start of a run P2 gets copies of what you start
 with. After that, whenever the team levels up (XP is shared), you pick your upgrade on the game's
 level-up screen as usual and P2 gets a pick of its own: a new ball, a ball upgrade, a new passive or
 a passive upgrade. Your friend picks at the bottom of their page. If nobody is on the page (local
 co-op, or your friend is busy), the F8 panel shows P2's choices and you can click one for P2. The
 panel also lists P2's balls and passives, and "LV UP" appears above P2 while a pick is waiting.
+When a fuser is picked up, you use it on the game's screen as usual, and once that screen closes P2
+gets a fuser of its own ("FUSER" above P2): Fission (1 to 5 random upgrade levels for P2's things),
+or one of the Fusions and Evolutions P2's own balls allow. What P2 got pops up on your friend's
+page and in the panel.
 Things to know:
 - P2's balls follow P2's passives and stats (damage, crit, speed, max health, ...), yours follow
   yours.
-- P2 doesn't get fusions or evolutions yet; those stay on your level-up screen.
-- P2's pick is applied once your own level-up screen is closed.
+- P2's pick is applied once your own level-up or fuser screen is closed.
 - Quitting and continuing a run later starts P2 over with copies of your current balls.
 Turn it off with SeparateLoadout = false under [Co-op] in the config; P2 then uses copies of your
 balls, as in plain Local Coop.
@@ -104,9 +107,11 @@ controls travel over the internet. That only works if the game plays out exactly
 both PCs when it gets the same start and the same controls. The sync test finds out. It doesn't
 connect anything yet; it tells us whether the approach can work, and if not, what goes wrong.
 
-For each test run the mod makes every frame exactly 1/60 s long, fixes the run's random seed, and
-plays for you (stand still, aim up, keep shooting). Don't touch mouse, keyboard or controller
-during a run. It stops after a minute, at your first level-up, or if you die or pause.
+For each test run the mod makes every frame exactly 1/60 s long, fixes the run's random seed,
+starts the game's clock at an agreed time, puts P2 on its exact starting spot, and plays for you
+(stand still, aim up, keep shooting). Don't touch mouse, keyboard or controller during a run. It
+stops after a minute, at your first level-up, or if you die or pause. Recordings from older
+versions don't work with this one: record again.
 
 1. F8 > "Playing on two PCs" > "1. Record a test run". Start a new run (any character, any
    level) from the menu, or restart the one you're in, and wait. It saves
@@ -115,7 +120,9 @@ during a run. It stops after a minute, at your first level-up, or if you die or 
    panel says IN SYNC, or OUT OF SYNC with the moment and what differed.
 3. Your friend installs the same version, puts your sync-test-recording.json in their BepInEx
    folder and does step 2 on their PC.
-Send me BepInEx\sync-test-result.txt from each check (and your friend's), whatever it says.
+Send me BepInEx\sync-test-result.txt from each check (and your friend's), whatever it says. If
+it says "restart the game and check again", the checking game had been running for longer than
+the recording one: restart it and check right away.
 Different unlocks and upgrades in your saves will show up as "Setup:" lines; that's expected for
 now and useful to know.
 

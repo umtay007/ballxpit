@@ -24,6 +24,7 @@ internal static class SyncProbe
         "pickups",
         "level random numbers", "misc random numbers", "shared random numbers",
         "P2 x", "P2 y",
+        "main-thread random numbers",
     };
 
     /// <summary>What each value belongs to, for the report.</summary>
@@ -37,6 +38,7 @@ internal static class SyncProbe
         "pickups",
         "random numbers", "random numbers", "random numbers",
         "P2", "P2",
+        "random numbers",
     };
 
     /// <summary>
@@ -118,6 +120,9 @@ internal static class SyncProbe
             v[22] = NativeFields.RandomState(grid.MiscRnd?.Pointer ?? IntPtr.Zero);
         }
         v[23] = NativeFields.RandomState(ThreadSafeRandom._global?.Pointer ?? IntPtr.Zero);
+        // ThreadSafeRandom hands out numbers (damage rolls, say) from a generator per thread, seeded from
+        // the shared one the first time a thread asks. This is the game thread's.
+        v[26] = NativeFields.RandomState(ThreadSafeRandom._local?.Pointer ?? IntPtr.Zero);
 
         Player? p2 = PlayerTwoController.GetPlayerTwo();
         if (p2 != null)

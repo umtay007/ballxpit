@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -6,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using BALLxPITLocalCoop;
 using BepInEx;
 using HarmonyLib;
@@ -23,7 +25,9 @@ internal enum SyncTestMode { Record, Check }
 ///
 /// A test run holds everything that could differ on purpose: every frame advances the game by exactly
 /// 1/60 s, the run's random seed is fixed (and the game's other random number generators are
-/// reseeded), and your controls are replaced by a fixed pattern (stand still, aim up, keep shooting).
+/// reseeded), the game's clock starts the fight at an agreed time (its timers round differently at
+/// different times), P2 starts on the exact spot, and your controls are replaced by a fixed pattern
+/// (stand still, aim up, keep shooting).
 /// Each frame's state is recorded. "Record" saves it to BepInEx/sync-test-recording.json; "Check"
 /// plays the same character and level again, on this PC or a friend's, and reports the first frame
 /// that comes out differently and what differed.
@@ -32,10 +36,14 @@ internal static class SyncTest
 {
     public const int TestSeed = 20260929;
     /// <summary>
-    /// 3: frame 0 is when the fight starts with P2 released from its walk-in and the extra random
-    /// number generators reseeded. 2: generators fingerprinted by their whole state. 1 read nothing.
+    /// 4: the game clock is set when the run starts and saved; the game thread's own generator is
+    /// fingerprinted; structs and enums inside generators count. 3: frame 0 is when the fight starts
+    /// with P2 released from its walk-in and the extra random number generators reseeded.
+    /// 2: generators fingerprinted by their whole state. 1 read nothing.
     /// </summary>
-    private const int RecordingFormat = 3;
+    private const int RecordingFormat = 4;
+    /// <summary>The game clock a run starts from is at least this (seconds), and a power of two above what it was.</summary>
+    private const float MinGameClock = 1024f;
     public const int TestFrames = 60 * FixedFrameClock.FramesPerSecond;
     private const int MaxWaitForPlayerTwo = 2 * FixedFrameClock.FramesPerSecond;
     private const int MaxStartFrames = 180 * FixedFrameClock.FramesPerSecond;
@@ -63,6 +71,18 @@ internal static class SyncTest
     private static readonly Dictionary<string, (int Frame, string Text)> GroupMismatch = new();
     private static int _waitedForPlayerTwo;
     private static string _endReason = "";
+    private static float _gameClock;
+    private static string _clockNote = "";
+    private static bool _seedBeforeLayout;
+    private static bool _loggedLevelRandom;
+
+    // Where ThreadSafeRandom hands out numbers: the game thread, or others (whose generators can't be reseeded).
+    private static int _mainThreadId;
+    private static long _drawsMain, _drawsOther;
+    private static readonly ConcurrentDictionary<int, byte> OtherThreads = new();
+
+    /// <summary>Things the test found out along the way, for the result file.</summary>
+    private static readonly List<string> Details = new();
 
     private static string _status = "";
     private static readonly List<string> ReportLines = new();
@@ -117,6 +137,16 @@ internal static class SyncTest
         GroupMismatch.Clear();
         _waitedForPlayerTwo = 0;
         _endReason = "";
+        _gameClock = 0;
+        _clockNote = "";
+        _seedBeforeLayout = false;
+        _loggedLevelRandom = false;
+        _mainThreadId = Environment.CurrentManagedThreadId;
+        Interlocked.Exchange(ref _drawsMain, 0);
+        Interlocked.Exchange(ref _drawsOther, 0);
+        OtherThreads.Clear();
+        Details.Clear();
+        CheckFingerprints();
         _saveWhenArmed = BattleSaveData.I?.Pointer ?? IntPtr.Zero;
         _phase = Phase.WaitingForRun;
         _status = mode == SyncTestMode.Record
@@ -161,9 +191,65 @@ internal static class SyncTest
         Patch(AccessTools.Method(typeof(InputMgr), "IsBtnDown", new[] { typeof(GameActionType) }), "InputMgr.IsBtnDown", nameof(IsBtnDownPrefix));
         Patch(AccessTools.Method(typeof(InputMgr), "IsBtnUp", new[] { typeof(GameActionType) }), "InputMgr.IsBtnUp", nameof(IsBtnUpPrefix));
         Patch(AccessTools.Method(typeof(Player), "GetMouseWorldPos", Type.EmptyTypes), "Player.GetMouseWorldPos", nameof(MouseWorldPosPrefix), required: false);
+        foreach (MethodInfo draw in new[]
+        {
+            AccessTools.Method(typeof(ThreadSafeRandom), "Next", Type.EmptyTypes),
+            AccessTools.Method(typeof(ThreadSafeRandom), "NextDouble", Type.EmptyTypes),
+            AccessTools.Method(typeof(ThreadSafeRandom), "RandomValue", Type.EmptyTypes),
+            AccessTools.Method(typeof(ThreadSafeRandom), "RandomRange", new[] { typeof(float), typeof(float) }),
+            AccessTools.Method(typeof(ThreadSafeRandom), "RandomRange", new[] { typeof(int), typeof(int) }),
+            AccessTools.Method(typeof(ThreadSafeRandom), "RandomSign", Type.EmptyTypes),
+        })
+            Patch(draw, "ThreadSafeRandom." + draw?.Name, nameof(CountDraw), required: false);
         _patchProblems = string.Join(", ", problems);
         _patched = problems.Count == 0;
         return _patched;
+    }
+
+    /// <summary>Counts where ThreadSafeRandom hands out a number during the test run.</summary>
+    private static void CountDraw()
+    {
+        if (_phase != Phase.Running) return;
+        int thread = Environment.CurrentManagedThreadId;
+        if (thread == _mainThreadId)
+        {
+            Interlocked.Increment(ref _drawsMain);
+        }
+        else
+        {
+            Interlocked.Increment(ref _drawsOther);
+            OtherThreads.TryAdd(thread, 0);
+        }
+    }
+
+    private static void Detail(string text)
+    {
+        Details.Add(text);
+        Plugin.Logger.LogInfo("Sync test: " + text);
+    }
+
+    /// <summary>
+    /// Two generators made with the same seed must get the same fingerprint, or the fingerprints say
+    /// nothing. Also notes how the runtime lays out its generators, for the result file.
+    /// </summary>
+    private static void CheckFingerprints()
+    {
+        try
+        {
+            var a = new Il2CppSystem.Random(TestSeed);
+            var b = new Il2CppSystem.Random(TestSeed);
+            uint ha = NativeFields.RandomState(a.Pointer), hb = NativeFields.RandomState(b.Pointer);
+            IntPtr klass = Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(a.Pointer);
+            Detail($"fingerprint check: two generators with the same seed give {(ha == hb ? "the same fingerprint (good)" : $"DIFFERENT fingerprints ({ha} / {hb})")}. "
+                + NativeFields.DescribeClass(klass));
+            IntPtr threadSafe = Il2CppInterop.Runtime.Il2CppClassPointerStore<ThreadSafeRandom>.NativeClassPtr;
+            if (threadSafe != IntPtr.Zero)
+                Detail("ThreadSafeRandom " + NativeFields.DescribeStaticField(threadSafe, "_global") + ", " + NativeFields.DescribeStaticField(threadSafe, "_local"));
+        }
+        catch (Exception ex)
+        {
+            Detail("fingerprint check failed: " + ex.Message);
+        }
     }
 
     /// <summary>A new run was set up (from the menu, or a restart): fix its seed and the frame clock.</summary>
@@ -183,7 +269,8 @@ internal static class SyncTest
         try
         {
             if (!IsActive) return;
-            Plugin.Logger.LogInfo($"Sync test: the game lays out a level ({loadMode}).");
+            BattleSaveData save = BattleSaveData.I;
+            Detail($"the game lays out a level ({loadMode}); run data: {(save == null ? "none yet" : $"seed {save.Seed}{(save.Pointer == _saveWhenArmed ? " (the one from before the test)" : "")}")}.");
             if (loadMode is not (LoadMode.kNewGame or LoadMode.kResetFloor)) return;
             if (_phase == Phase.WaitingForRun) BeginRun();
             else if (_phase == Phase.Starting && !_gridSeeded) ForceSeed();
@@ -200,7 +287,9 @@ internal static class SyncTest
         try
         {
             ForceSeed();
+            _seedBeforeLayout = _seedForced;
             _clockFixed = FixedFrameClock.Engage();
+            SetGameClock();
             _phase = Phase.Starting;
             _startFrames = 0;
             _status = "Test run starting: hands off.";
@@ -222,9 +311,81 @@ internal static class SyncTest
         }
         else
         {
-            Plugin.Logger.LogWarning("Sync test: there's no run data yet to fix the seed in.");
+            Plugin.Logger.LogInfo("Sync test: there's no run data yet to fix the seed in; it's fixed once the game makes it.");
         }
         EngineCalls.InitRandom(TestSeed);
+    }
+
+    /// <summary>
+    /// The run data may only be made while the level loads (the first run after starting the game), or
+    /// be replaced then: keep its seed fixed until the fight starts. The level's generator is made from
+    /// the seed each turn (BattleSaveData.GetCurTurnSeed), the first time on the fight's first frame.
+    /// </summary>
+    private static void EnsureSeed(string when)
+    {
+        BattleSaveData save = BattleSaveData.I;
+        if (save == null) return;
+        if (save.Seed != TestSeed)
+        {
+            Detail($"the run's seed was {save.Seed} {when}; set it to {TestSeed}.");
+            save.Seed = TestSeed;
+        }
+        _seedForced = true;
+    }
+
+    /// <summary>
+    /// The game's timers count from TimeMgr's clock, a float counting seconds since the game started:
+    /// at 600 s it adds each frame's 0.025 s with different rounding than at 60 s, and timers drift
+    /// apart. The run starts the clock at an agreed value instead: a power of two, at least
+    /// <see cref="MinGameClock"/>, never earlier than the clock already was (timers the game set
+    /// before just run out), and the recording's when checking.
+    /// </summary>
+    private static void SetGameClock()
+    {
+        TimeMgr time = TimeMgr.I;
+        if (time == null)
+        {
+            _clockNote = "the game clock wasn't there to set";
+            return;
+        }
+        float now = time._gameTime;
+        double wanted = MinGameClock;
+        while (wanted < now + 60) wanted *= 2;
+        float reference = _reference?.GameClock ?? 0;
+        if (reference > 0)
+        {
+            if (reference >= now + 1) wanted = reference;
+            else _clockNote = $"this game has been running longer than the recorded one ({now:0} s, the recording starts at {reference:0} s): restart the game and check again";
+        }
+        time._gameTime = (float)wanted;
+        _gameClock = (float)wanted;
+        Detail($"game clock set from {now.ToString("0.###", CultureInfo.InvariantCulture)} s to {wanted.ToString(CultureInfo.InvariantCulture)} s.");
+    }
+
+    /// <summary>
+    /// Starts P2 on the spot Local Coop's walk-in aims for (0.75 to P1's right), exactly: the walk-in
+    /// leaves it a hair off, by a different amount each time.
+    /// </summary>
+    private static void PlacePlayerTwo()
+    {
+        PlayerTwoController controller = PlayerTwoController._instance;
+        Player? p2 = controller?._playerTwo;
+        PlayerCharController? p1 = controller?._playerOneController;
+        if (p2 == null || p1 == null) return;
+        Vector3 p1Position = p1.transform.position;
+        var target = new Vector3(p1Position.x + 0.75f, p1Position.y, p1Position.z);
+        Vector3 before = NativePlayerContext.GetPlayerPosition(p2);
+        Player previous = NativePlayerContext.EnterPlayerTwoContext(p2);
+        try
+        {
+            p2.SetPos(target, true);
+        }
+        finally
+        {
+            NativePlayerContext.ExitContext(previous);
+        }
+        Vector3 after = NativePlayerContext.GetPlayerPosition(p2);
+        Detail(FormattableString.Invariant($"P2 placed from ({before.x:0.#####}, {before.y:0.#####}) to ({after.x:0.#####}, {after.y:0.#####})."));
     }
 
     /// <summary>
@@ -274,6 +435,7 @@ internal static class SyncTest
         try
         {
             if (_phase != Phase.Starting || loadMode is not (LoadMode.kNewGame or LoadMode.kResetFloor) || _stabilized) return;
+            EnsureSeed("after the level was laid out");
             GridMgr grid = GridMgr.I;
             if (grid != null) grid.MiscRnd = new Il2CppSystem.Random(TestSeed + 1);
             ThreadSafeRandom._global = new Il2CppSystem.Random(TestSeed + 2);
@@ -390,12 +552,14 @@ internal static class SyncTest
         if (game.CurState == GameState.kEnteringLvl) _sawLevelLoad = true;
         if (game.CurState != GameState.kPlaying || (!_sawLevelLoad && save.Pointer == _saveWhenArmed)) return;
         _clockFixed = FixedFrameClock.Engage();
+        SetGameClock();
         _phase = Phase.Starting;
         Plugin.Logger.LogWarning("Sync test: the run started without the seed hook; its random seed isn't fixed.");
     }
 
     private static void WaitForPlay()
     {
+        EnsureSeed("while the level loaded");
         GameMgr game = GameMgr.I;
         if (game == null || game.CurState != GameState.kPlaying)
         {
@@ -405,11 +569,30 @@ internal static class SyncTest
         // The fight has begun; with Local Coop, wait (briefly) for P2 so both start together.
         if (PlayerTwoExpected && !PlayerTwoReady && ++_waitedForPlayerTwo <= MaxWaitForPlayerTwo) return;
         ReleasePlayerTwoIntro();
+        PlacePlayerTwo();
         ReseedExtraRandom();
         _stabilized = true;
         TimeMgr time = TimeMgr.I;
+        if (time != null)
+        {
+            Detail(FormattableString.Invariant($"fight starts: game clock {time._gameTime} s, physics clock {time._physicsTime} s, fixed-step leftover {time._timeDebt} s (cleared)."));
+            time._timeDebt = 0f;
+        }
         _gameTimeAtStart = time != null ? time._gameTime : 0;
         _physicsTimeAtStart = time != null ? time._physicsTime : 0;
+        BattleSaveData runData = BattleSaveData.I;
+        if (runData != null)
+        {
+            try
+            {
+                Detail($"run seed {runData.Seed}, level seed {runData.GetCurLvlSeed()}, turn seed {runData.GetCurTurnSeed()}.");
+            }
+            catch (Exception ex)
+            {
+                Detail("couldn't read the run's seeds: " + ex.Message);
+            }
+        }
+        Detail($"random numbers after reseeding: misc {NativeFields.RandomState(GridMgr.I?.MiscRnd?.Pointer ?? IntPtr.Zero)}, shared {NativeFields.RandomState(ThreadSafeRandom._global?.Pointer ?? IntPtr.Zero)}, game thread {NativeFields.RandomState(ThreadSafeRandom._local?.Pointer ?? IntPtr.Zero)}.");
         _setup = SyncProbe.Setup();
         _phase = Phase.Running;
         Plugin.Logger.LogInfo($"Sync test: playing after {_startFrames} loading frames"
@@ -447,6 +630,11 @@ internal static class SyncTest
         double[] sample = SyncProbe.Sample(_stepsThisFrame, _gameTimeAtStart, _physicsTimeAtStart);
         int index = Frames.Count;
         Frames.Add(sample);
+        if (!_loggedLevelRandom && sample[Array.IndexOf(SyncProbe.Names, "level random numbers")] != 0)
+        {
+            _loggedLevelRandom = true;
+            Detail($"the level's generator appeared on frame {index} (turn {sample[Array.IndexOf(SyncProbe.Names, "turn")]}).");
+        }
         if (_reference != null)
         {
             if (index >= _reference.Frames.Count)
@@ -506,6 +694,7 @@ internal static class SyncTest
         ReportLines.Clear();
         var notes = new List<string>();
         if (!_seedForced) notes.Add("the run's seed wasn't fixed");
+        if (_clockNote.Length > 0) notes.Add(_clockNote);
         if (!_clockFixed) notes.Add("the frame clock wasn't fixed (" + (EngineCalls.Missing.Length > 0 ? EngineCalls.Missing : "unavailable") + ")");
         if (!_stabilized) notes.Add("the other random number generators weren't reseeded");
         string caveat = notes.Count > 0 ? " Note: " + string.Join(", ", notes) + "." : "";
@@ -520,7 +709,7 @@ internal static class SyncTest
         {
             try
             {
-                new Recording(_setup, Frames, _startFrames, reason, _seedForced, _stabilized, _clockFixed).Save(RecordingPath);
+                new Recording(_setup, Frames, _startFrames, reason, _seedForced, _stabilized, _clockFixed, _gameClock).Save(RecordingPath);
                 _status = $"Recorded {Seconds(Frames.Count)} s (stopped because {reason}).{caveat}";
                 ReportLines.Add(_status);
                 ReportLines.Add("Next: click \"Check\" and start the same character and level again, hands off.");
@@ -554,6 +743,10 @@ internal static class SyncTest
             foreach (string line in _reference!.SetupDifferences(_setup).Take(6)) ReportLines.Add("Setup: " + line);
         }
         if (ReportLines.Count == 0) ReportLines.Add(_status);
+        long main = Interlocked.Read(ref _drawsMain), other = Interlocked.Read(ref _drawsOther);
+        Detail(other > 0
+            ? $"ThreadSafeRandom handed out {main} numbers on the game thread and {other} on {OtherThreads.Count} other thread(s): those can't be kept in step."
+            : $"ThreadSafeRandom handed out {main} numbers, all on the game thread.");
         WriteResult(reason);
         Plugin.Logger.LogInfo("Sync test finished: " + string.Join(" | ", ReportLines));
     }
@@ -566,7 +759,9 @@ internal static class SyncTest
             sb.AppendLine($"BALLxPIT Online Co-op {Plugin.PluginVersion} sync test, {DateTime.Now:yyyy-MM-dd HH:mm}, mode {_mode}");
             foreach (string line in ReportLines) sb.AppendLine(line);
             sb.AppendLine($"Ended because: {reason}. Frames: {Frames.Count}. Loading frames: {_startFrames}. Waited for P2: {_waitedForPlayerTwo}. Mismatched frames: {_mismatchedFrames}.");
-            sb.AppendLine($"Seed fixed: {_seedForced}. Random numbers reseeded: {_stabilized}. Clock fixed: {_clockFixed}.");
+            sb.AppendLine($"Seed fixed: {_seedForced} ({(_seedBeforeLayout ? "before" : "after")} the level was laid out). Random numbers reseeded: {_stabilized}. Frame clock fixed: {_clockFixed}. Game clock: {_gameClock.ToString(CultureInfo.InvariantCulture)} s.");
+            sb.AppendLine("Details:");
+            foreach (string line in Details) sb.AppendLine("  " + line);
             sb.AppendLine("Setup here:");
             foreach (var (name, value) in _setup) sb.AppendLine($"  {name} = {value}");
             // The frames around where each part first drifted (at most four places).
@@ -611,9 +806,11 @@ internal static class SyncTest
         public readonly int StartFrames;
         public readonly string EndReason;
         public readonly bool SeedForced, Stabilized, ClockFixed;
+        public readonly float GameClock;
 
-        public Recording(List<(string, string)> setup, List<double[]> frames, int startFrames, string endReason, bool seedForced, bool stabilized, bool clockFixed)
+        public Recording(List<(string, string)> setup, List<double[]> frames, int startFrames, string endReason, bool seedForced, bool stabilized, bool clockFixed, float gameClock)
         {
+            GameClock = gameClock;
             Setup = setup;
             Frames = frames;
             StartFrames = startFrames;
@@ -661,6 +858,7 @@ internal static class SyncTest
             json.WriteBoolean("seedForced", SeedForced);
             json.WriteBoolean("stabilized", Stabilized);
             json.WriteBoolean("clockFixed", ClockFixed);
+            json.WriteNumber("gameClock", GameClock);
             json.WriteNumber("startFrames", StartFrames);
             json.WriteString("end", EndReason);
             json.WriteStartArray("setup");
@@ -700,7 +898,8 @@ internal static class SyncTest
             var frames = root.GetProperty("frames").EnumerateArray()
                 .Select(f => f.EnumerateArray().Select(v => v.GetDouble()).ToArray()).ToList();
             return new Recording(setup, frames, root.GetProperty("startFrames").GetInt32(), root.GetProperty("end").GetString() ?? "",
-                root.GetProperty("seedForced").GetBoolean(), root.GetProperty("stabilized").GetBoolean(), root.GetProperty("clockFixed").GetBoolean());
+                root.GetProperty("seedForced").GetBoolean(), root.GetProperty("stabilized").GetBoolean(), root.GetProperty("clockFixed").GetBoolean(),
+                root.GetProperty("gameClock").GetSingle());
         }
     }
 }

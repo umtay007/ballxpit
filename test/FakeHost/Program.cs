@@ -70,6 +70,16 @@ var fakePassives = new List<(string Name, string Color, int Lvl)>();
 int fakePicks = Environment.GetEnvironmentVariable("FAKEHOST_PICKS") is string pickCount ? int.Parse(pickCount, CultureInfo.InvariantCulture) : 2;
 int fakeOfferId = 1;
 var fakeChoices = new[] { ("Bleed", "#e0405a", true, true), ("Frost", "#7fd4ff", true, false), ("Magnet", "#c0c0ff", false, true) };
+// After the level-ups, a fuser (FAKEHOST_FUSER=0 leaves it out).
+bool fakeFuser = Environment.GetEnvironmentVariable("FAKEHOST_FUSER") != "0";
+var fuserChoices = new[]
+{
+    ("Fission", "fission", "+1-5 upgrade levels at random", "#ffc34d"),
+    ("Frost + Bleed", "fusion", "Fusion: the two balls become one", "#7fd4ff"),
+    ("Frostburn", "evolution", "Evolution", "#ff7f50"),
+};
+string? fakeNews = null;
+int fakeNewsId = 0;
 string FakeLoadout()
 {
     string Items(List<(string Name, string Color, int Lvl)> items) => string.Join(",", items.Select(i =>
@@ -84,6 +94,14 @@ string FakeLoadout()
                 return FormattableString.Invariant($"{{\"name\":\"{c.Item1}\",\"ball\":{(c.Item3 ? "true" : "false")},\"new\":{(c.Item4 ? "true" : "false")},\"lvl\":{lvl},\"color\":\"{c.Item2}\"}}");
             })) + "]}";
     }
+    else if (fakeFuser)
+    {
+        json += FormattableString.Invariant($",\"offer\":{{\"id\":{fakeOfferId},\"kind\":\"fuser\",\"wait\":false,\"choices\":[")
+            + string.Join(",", fuserChoices.Select(c => FormattableString.Invariant(
+                $"{{\"name\":\"{c.Item1}\",\"ball\":true,\"new\":false,\"lvl\":1,\"color\":\"{c.Item4}\",\"opt\":\"{c.Item2}\",\"desc\":\"{c.Item3}\"}}"))) + "]}";
+        json = json.Replace("\"picks\":0", "\"picks\":1");
+    }
+    if (fakeNews != null) json += FormattableString.Invariant($",\"news\":{{\"id\":{fakeNewsId},\"text\":\"{fakeNews}\"}}");
     return json + "}";
 }
 server.SetLoadout(FakeLoadout());
@@ -126,6 +144,17 @@ while ((DateTime.UtcNow - started).TotalSeconds < runFor)
             // The same three choices again, except what was just taken new comes back as an upgrade.
             fakeChoices[pickedIndex] = (name, color, ball, false);
             fakePicks--;
+            fakeOfferId++;
+            server.SetLoadout(FakeLoadout());
+        }
+        else if (pickedOffer == fakeOfferId && fakePicks == 0 && fakeFuser && pickedIndex < fuserChoices.Length)
+        {
+            // Fission: two random levels (always Frost and the first passive here).
+            fakeBalls[0] = (fakeBalls[0].Name, fakeBalls[0].Color, fakeBalls[0].Lvl + 1);
+            if (fakePassives.Count > 0) fakePassives[0] = (fakePassives[0].Name, fakePassives[0].Color, fakePassives[0].Lvl + 1);
+            fakeNews = $"P2's Fission: +2 upgrade levels ({fakeBalls[0].Name} Lv {fakeBalls[0].Lvl}, {(fakePassives.Count > 0 ? fakePassives[0].Name + " Lv " + fakePassives[0].Lvl : "")}).";
+            fakeNewsId++;
+            fakeFuser = false;
             fakeOfferId++;
             server.SetLoadout(FakeLoadout());
         }

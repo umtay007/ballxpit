@@ -13,6 +13,7 @@ public class Player : MonoBehaviour
     public Vector2 _lastAimDir { get => throw null; set => throw null; }
     public EnemyAttackResult Damage(float amt, PieceDmgType dmgType) => throw null;
     public void Heal(float amt) => throw null;
+    public void SetPos(Vector3 pos, bool snap = false) => throw null;
 }
 
 public enum PieceDmgType { kMelee, kArrow, kCannon, kSelf, kObstacle, kTouch, kVenom, kBurn, kNum }
@@ -38,6 +39,9 @@ public class BattleSaveData : Il2CppSystem.Object
     public List<PickupInst> Pickups { get => throw null; set => throw null; }
     public int Seed { get => throw null; set => throw null; }
     public int UpgradeLvl { get => throw null; set => throw null; }
+    public int LastFissionCount { get => throw null; set => throw null; }
+    public int GetCurTurnSeed() => throw null;
+    public int GetCurLvlSeed() => throw null;
 }
 
 // Real base class is Sirenix's SerializedMonoBehaviour; only the members matter here.
@@ -51,6 +55,7 @@ public class UpgradeMgr : MonoBehaviour
     public void CalculateStats() => throw null;
     public void ApplyUpgrade(UpgradeChoice c) => throw null;
     public void AddHero(HeroType ht, int evoIdx = 0) => throw null;
+    public void CombineHeroes(HeroCombo combo) => throw null;
 }
 
 // Real base class is Il2CppSystem.Object; a static class can't say so in C#.
@@ -114,6 +119,8 @@ public class HeroInst : UpgradeInst<HeroInfo>
     public BallObj Obj { get => throw null; set => throw null; }
     public override HeroInfo GetInfo() => throw null;
     public bool HasType(HeroType ht) => throw null;
+    public bool CanCombine(HeroInst h2) => throw null;
+    public bool IsBadCombo(HeroInst h2) => throw null;
 }
 
 public class PassiveInst : UpgradeInst<PassiveInfo>
@@ -130,6 +137,23 @@ public sealed class UpgradeChoice : Il2CppSystem.Object
 {
     public UpgradeChoice(IntPtr pointer) : base(pointer) { }
     public UpgradeChoice(UpgradeInfo inf, bool isNew) : base(IntPtr.Zero) => throw null;
+    public UpgradeChoice(UpgradeType t, int eqIdx, UpgradeInfo inf, bool isNew, int evoIdx = 0) : base(IntPtr.Zero) => throw null;
+    public UpgradeType Type { get => throw null; set => throw null; }
+    public int EquipmentIdx { get => throw null; set => throw null; }
+    public int EvoIdx { get => throw null; set => throw null; }
+    public UpgradeInfo Info { get => throw null; set => throw null; }
+    public bool IsNew { get => throw null; set => throw null; }
+}
+
+// A blittable struct: Il2CppInterop keeps it a struct.
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit)]
+public struct HeroCombo
+{
+    [System.Runtime.InteropServices.FieldOffset(0)] public int Idx1;
+    [System.Runtime.InteropServices.FieldOffset(4)] public HeroType H1;
+    [System.Runtime.InteropServices.FieldOffset(8)] public int Idx2;
+    [System.Runtime.InteropServices.FieldOffset(12)] public HeroType H2;
+    public HeroCombo(int idx1, HeroType h1, int idx2, HeroType h2) => throw null;
 }
 
 // Real base class is FastPooledObject.
@@ -161,7 +185,11 @@ public class LevelUpUI : OverlayUI
     public Il2CppReferenceArray<LevelUpCurEquipItem> CurHeroItems { get => throw null; set => throw null; }
     public Il2CppReferenceArray<LevelUpCurEquipItem> CurPassiveItems { get => throw null; set => throw null; }
     public int _numUpgradeChoices { get => throw null; set => throw null; }
+    public LevelUpType Type { get => throw null; set => throw null; }
     public void Activate(LevelUpType t) => throw null;
+    public void PopulateUpgrades() => throw null;
+    public List<UpgradeChoice> _availMerges { get => throw null; set => throw null; }
+    public List<HeroCombo> _availHCombos { get => throw null; set => throw null; }
 }
 
 public class LevelUpCurEquipItem : MonoBehaviour
@@ -183,6 +211,7 @@ public class TimeMgr : MonoBehaviour
     public TimeMgr(IntPtr pointer) : base(pointer) { }
     public static TimeMgr I { get => throw null; set => throw null; }
     public float _gameTime { get => throw null; set => throw null; }
+    public float _timeDebt { get => throw null; set => throw null; }
     public float _physicsTime { get => throw null; set => throw null; }
     public float _gameSpeed { get => throw null; set => throw null; }
     public float _defaultFixedDeltaTime { get => throw null; set => throw null; }
@@ -235,6 +264,12 @@ public class ThreadSafeRandom : Il2CppSystem.Object
     public ThreadSafeRandom(IntPtr pointer) : base(pointer) { }
     public static Il2CppSystem.Random _global { get => throw null; set => throw null; }
     public static Il2CppSystem.Random _local { get => throw null; set => throw null; }
+    public int Next() => throw null;
+    public double NextDouble() => throw null;
+    public float RandomValue() => throw null;
+    public float RandomRange(float min, float max) => throw null;
+    public int RandomRange(int min, int max) => throw null;
+    public int RandomSign() => throw null;
 }
 
 public class InputMgr : MonoBehaviour

@@ -374,7 +374,7 @@ internal static class OnlineController
             : $"Online: {guests} connected ({OnlineConfig.PanelKey.Value})";
         // Without a guest to pick on their page, the host picks P2's upgrades in the panel.
         if (PlayerTwoLoadout.Offer != null && (server == null || !server.HasPlayer))
-            text = $"P2 level-up: pick in the panel ({OnlineConfig.PanelKey.Value})";
+            text = $"P2 {(PlayerTwoLoadout.OfferIsFuser ? "fuser" : "level-up")}: pick in the panel ({OnlineConfig.PanelKey.Value})";
         if (GUI.Button(new Rect(Screen.width - 260 - PanelMargin, PanelMargin, 260, RowHeight), text)) _panelVisible = true;
     }
 
@@ -398,13 +398,18 @@ internal static class OnlineController
         if (PlayerTwoLoadout.Enabled && PlayerTwoBridge.IsPlayerTwoActive() && PlayerTwoLoadout.Balls.Count > 0)
         {
             Row($"P2's balls: {PlayerTwoLoadout.DescribeBalls()}   ·   passives: {PlayerTwoLoadout.DescribePassives()}");
+            string news = PlayerTwoLoadout.News;
+            if (news.Length > 0) Row(news);
             IReadOnlyList<LoadoutChoice>? offer = PlayerTwoLoadout.Offer;
+            if (offer == null && PlayerTwoLoadout.NextPickIsFuser)
+                Row("P2 got a fuser too: P2's choices come up when your fuser screen closes.");
             if (offer != null)
             {
                 int more = PlayerTwoLoadout.PicksWaiting - 1;
+                string what = PlayerTwoLoadout.OfferIsFuser ? "fuser" : "level-up";
                 Row(PlayerTwoLoadout.WaitingForLevelUpScreen
                     ? "P2's pick is applied when your level-up screen closes."
-                    : $"P2 level-up{(more > 0 ? $" (+{more} more)" : "")}: your friend picks on their page, or click one for P2:");
+                    : $"P2 {what}{(more > 0 ? $" (+{more} more)" : "")}: your friend picks on their page, or click one for P2:");
                 float cell = (width - (offer.Count - 1) * RowGap) / offer.Count;
                 for (int i = 0; i < offer.Count; i++)
                 {

@@ -59,11 +59,17 @@ controller. Players install it with [docs/INSTALL.txt](docs/INSTALL.txt).
   P2's balls hit with P2's stats. P2's numbers come from the game's own `UpgradeMgr.CalculateStats`,
   run inside P2's context. Each rise of `BattleSaveData.UpgradeLvl` gives P2 a pick, offered on the
   guest page and in the panel and applied with `UpgradeMgr.ApplyUpgrade` inside P2's context.
+  `LevelUpUI.Activate(kFuser)` gives P2 a fuser of its own: Fission (1-5 random upgrade levels), or
+  the Evolutions and Fusions the game lists for P2 (`LevelUpUI.PopulateUpgrades` run in P2's
+  context, then `_availMerges` / `_availHCombos`), applied with `ApplyUpgrade` / `CombineHeroes`.
 - **Sync test (towards playing on two PCs).** Lockstep play needs the game to be deterministic:
   same start + same inputs = same frames. `Game/Sync` checks that. A test run fixes the frame time
-  (`Time.captureDeltaTime` = 1/60 through IL2CPP internal calls, vsync off, 60 fps cap), sets
-  `BattleSaveData.Seed` in a `GridMgr.InitGrid` prefix, reseeds `GridMgr.MiscRnd`, `ThreadSafeRandom`
-  and `UnityEngine.Random`, and replaces P1's `InputMgr` gameplay actions and mouse aim with a fixed
+  (`Time.captureDeltaTime` = 1/60 through IL2CPP internal calls, vsync off, 60 fps cap), keeps
+  `BattleSaveData.Seed` fixed from `GridMgr.InitGrid` until the fight starts (the level's generator
+  is made from it every turn), starts `TimeMgr._gameTime` at an agreed power of two (the game's
+  float timers round differently at different clock values), reseeds `GridMgr.MiscRnd`,
+  `ThreadSafeRandom` and `UnityEngine.Random`, places P2 exactly, counts which threads draw from
+  `ThreadSafeRandom`, and replaces P1's `InputMgr` gameplay actions and mouse aim with a fixed
   pattern. Every frame it records time, players, health/XP, every enemy (`BattleSaveData.Pieces`),
   every ball, pickups and the random generators' full state, plus a setup fingerprint (character,
   level, character stats, every `UpgradeMgr` number, balls, passives). A check run compares frame by

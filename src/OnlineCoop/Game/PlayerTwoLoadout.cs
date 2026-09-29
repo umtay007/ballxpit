@@ -16,23 +16,35 @@ using PassiveList = Il2CppSystem.Collections.Generic.List<PassiveInst>;
 
 namespace BALLxPITOnlineCoop.Game;
 
-internal enum PickKind { Any, Ball, Passive }
+internal enum PickKind { Any, Ball, Passive, Fuser }
 
-/// <summary>One option P2 is offered at a level-up.</summary>
+/// <summary>What a fuser choice does (the game's Fission, Fusion and Evolution).</summary>
+internal enum FuserOption { None, Fission, Fusion, Evolution }
+
+/// <summary>One option P2 is offered at a level-up or a fuser.</summary>
 internal sealed class LoadoutChoice
 {
-    public UpgradeInfo Info = null!;
+    public UpgradeInfo? Info;
     public bool IsBall;
     public bool IsNew;
     public HeroInst? Hero;
     public PassiveInst? Passive;
+    /// <summary>The game's level, which counts from 0 (shown as Lv 1).</summary>
     public int FromLevel;
     public string Name = "";
     public string Color = "#ffffff";
+    public FuserOption Fuser;
+    public string Description = "";
+    public HeroCombo Combo;
+    public UpgradeChoice? Merge;
 
-    public string Label => IsNew
-        ? $"New {(IsBall ? "ball" : "passive")}: {Name}"
-        : $"{Name} Lv {FromLevel} > {FromLevel + 1}";
+    public string Label => Fuser switch
+    {
+        FuserOption.Fission => "Fission: +1-5 upgrade levels",
+        FuserOption.Fusion => "Fusion: " + Name,
+        FuserOption.Evolution => "Evolution: " + Name,
+        _ => IsNew ? $"New {(IsBall ? "ball" : "passive")}: {Name}" : $"{Name} Lv {FromLevel + 1} > {FromLevel + 2}",
+    };
 }
 
 /// <summary>
@@ -48,11 +60,18 @@ internal sealed class LoadoutChoice
 /// Each time the shared level goes up, P2 gets a pick of its own: new ball, ball upgrade, new passive
 /// or passive upgrade, offered on the guest's page and in the host's panel. A pick is applied with the
 /// game's UpgradeMgr.ApplyUpgrade while P2's things are swapped in.
+///
+/// A fuser gives P2 a fuser of its own once the host's fuser screen has closed: Fission (1 to 5 random
+/// upgrade levels), or one of the Fusions and Evolutions P2's balls allow. The game works those out
+/// itself (LevelUpUI.PopulateUpgrades, run with P2's things swapped in) and applies them with
+/// UpgradeMgr.CombineHeroes and ApplyUpgrade, again in P2's context.
 /// </summary>
 internal static class PlayerTwoLoadout
 {
     private const int DefaultSlots = 4;
     private const int DefaultChoices = 3;
+    private const int MaxFuserChoices = 5;
+    private const double NewsSeconds = 12;
 
     private static bool _installed;
     private static bool _loggedError;
@@ -97,6 +116,12 @@ internal static class PlayerTwoLoadout
     private static string _json = "";
     private static double _jsonBuiltAt;
     private static bool _jsonDirty = true;
+    private static bool _loggedPopulateError;
+
+    // What P2's last pick did ("Fission +3: Burn Lv 2, ..."), shown to the guest and in the panel for a while.
+    private static string _news = "";
+    private static double _newsAt = double.NegativeInfinity;
+    private static int _newsId;
 
     public static bool Enabled => _installed && OnlineConfig.SeparateLoadout.Value;
     /// <summary>P2's own numbers are in use (P2's max health comes from <see cref="MaxHealth"/>).</summary>
@@ -107,6 +132,10 @@ internal static class PlayerTwoLoadout
     public static bool WaitingForLevelUpScreen => _queuedChoice >= 0;
     public static IReadOnlyList<HeroInst> Balls => HeroMirror;
     public static IReadOnlyList<PassiveInst> PassiveItems => PassiveMirror;
+    public static bool NextPickIsFuser => Picks.Count > 0 && Picks.Peek() == PickKind.Fuser;
+    public static bool OfferIsFuser => _offer != null && _offerKind == PickKind.Fuser;
+    /// <summary>What P2's last pick did, while it's recent; empty otherwise.</summary>
+    public static string News => HostServer.Now - _newsAt < NewsSeconds ? _news : "";
 
     public static void Install(Harmony harmony)
     {
@@ -303,6 +332,8 @@ internal static class PlayerTwoLoadout
             if (!Enabled || _heroes == null || PlayerTwoController.GetPlayerTwo() == null) return;
             if (t == LevelUpType.kBonusBall) AddPick(PickKind.Ball, "a bonus ball");
             else if (t == LevelUpType.kBonusPassive) AddPick(PickKind.Passive, "a bonus passive");
+            // Only a fresh fuser counts, not the fuser screen being opened again while it's up.
+            else if (t == LevelUpType.kFuser && !(IsLevelUpScreenOpen() && LevelUpUI.I.Type == LevelUpType.kFuser)) AddPick(PickKind.Fuser, "a fuser");
         }
         catch (Exception ex)
         {
@@ -358,7 +389,7 @@ internal static class PlayerTwoLoadout
                 _queuedChoice = -1;
                 Choose(p2, index);
             }
-            if (_offer == null && Picks.Count > 0) MakeOffer();
+            if (_offer == null && Picks.Count > 0) MakeOffer(p2);
         }
         catch (Exception ex)
         {
@@ -397,6 +428,8 @@ internal static class PlayerTwoLoadout
         _offer = null;
         _queuedChoice = -1;
         _lastLevel = int.MinValue;
+        _news = "";
+        _newsAt = double.NegativeInfinity;
         _jsonDirty = true;
     }
 
@@ -534,23 +567,178 @@ internal static class PlayerTwoLoadout
 
     // ---- Offers and picks -----------------------------------------------------------------
 
-    private static void MakeOffer()
+    private static void MakeOffer(Player p2)
     {
         while (Picks.Count > 0)
         {
             PickKind kind = Picks.Peek();
-            List<LoadoutChoice> choices = BuildChoices(kind);
+            // P2's fuser options are worked out with the game's level-up screen, so after the host's closes.
+            if (kind == PickKind.Fuser && IsLevelUpScreenOpen()) return;
+            List<LoadoutChoice> choices = kind == PickKind.Fuser ? BuildFuserChoices(p2) : BuildChoices(kind);
             if (choices.Count > 0)
             {
                 _offer = choices;
                 _offerKind = kind;
                 _offerId = (_offerId + 1) & 0x3fffffff;
                 _jsonDirty = true;
+                if (kind == PickKind.Fuser)
+                    Plugin.Logger.LogInfo("P2's fuser offers: " + string.Join(" | ", choices.ConvertAll(c => c.Label)));
                 return;
             }
             Picks.Dequeue();
-            Plugin.Logger.LogInfo("P2 has nothing left to pick for this level-up; skipped it.");
+            if (kind == PickKind.Fuser) SetNews("P2's fuser: every ball and passive is maxed and nothing can be fused.");
+            else Plugin.Logger.LogInfo("P2 has nothing left to pick for this level-up; skipped it.");
         }
+    }
+
+    /// <summary>
+    /// Fission when anything of P2's can still level up, then the Evolutions and Fusions the game
+    /// allows for P2's balls and passives.
+    /// </summary>
+    private static List<LoadoutChoice> BuildFuserChoices(Player p2)
+    {
+        var choices = new List<LoadoutChoice>();
+        if (UpgradableItems().Count > 0)
+            choices.Add(new LoadoutChoice { Fuser = FuserOption.Fission, Name = "Fission", Description = "+1-5 upgrade levels at random", Color = "#ffc34d", IsBall = true });
+
+        ReadFuserOptions(p2, out List<UpgradeChoice> merges, out List<HeroCombo> combos);
+        foreach (UpgradeChoice merge in merges)
+        {
+            if (choices.Count >= MaxFuserChoices) break;
+            UpgradeInfo? info = merge.Info;
+            if (info == null) continue;
+            bool ball = SafeCall(() => info.GetUpgradeType() == UpgradeType.kHero, true);
+            choices.Add(new LoadoutChoice
+            {
+                Fuser = FuserOption.Evolution, Merge = merge, Info = info, IsBall = ball, IsNew = true,
+                Name = NameOf(info), Description = "Evolution", Color = ball ? ColorOf(new HeroInfo(info.Pointer).BallColor) : ColorOf(new PassiveInfo(info.Pointer).MainColor),
+            });
+        }
+        foreach (HeroCombo combo in combos)
+        {
+            if (choices.Count >= MaxFuserChoices) break;
+            HeroInst? first = BallOfType(combo.H1, combo.Idx1), second = BallOfType(combo.H2, combo.Idx2);
+            if (first == null || second == null) continue;
+            HeroInfo? firstInfo = first.GetInfo();
+            choices.Add(new LoadoutChoice
+            {
+                Fuser = FuserOption.Fusion, Combo = combo, IsBall = true,
+                Name = $"{BallName(first)} + {BallName(second)}", Description = "Fusion: the two balls become one",
+                Color = firstInfo == null ? "#ffffff" : ColorOf(firstInfo.BallColor),
+            });
+        }
+        return choices;
+    }
+
+    /// <summary>
+    /// Has the game list the Evolutions and Fusions P2 could make, by running the level-up screen's
+    /// own PopulateUpgrades with P2's things swapped in (and again for P1 afterwards). Without it,
+    /// Fusions are worked out pair by pair and Evolutions aren't offered.
+    /// </summary>
+    private static void ReadFuserOptions(Player p2, out List<UpgradeChoice> merges, out List<HeroCombo> combos)
+    {
+        merges = new List<UpgradeChoice>();
+        combos = new List<HeroCombo>();
+        BattleSaveData save = BattleSaveData.I;
+        LevelUpUI ui = LevelUpUI.I;
+        if (save == null || _heroes == null) return;
+        float health = save.CurHealth;
+        bool populated = false;
+        Player previous = NativePlayerContext.EnterPlayerTwoContext(p2);
+        try
+        {
+            if (!_swappedIn) throw new InvalidOperationException("P2's balls and passives weren't swapped in.");
+            if (ui != null)
+            {
+                try
+                {
+                    ui.PopulateUpgrades();
+                    populated = true;
+                    var availMerges = ui._availMerges;
+                    if (availMerges != null)
+                        for (int i = 0; i < availMerges.Count; i++)
+                        {
+                            UpgradeChoice merge = availMerges[i];
+                            if (merge != null && merge.Info != null) merges.Add(merge);
+                        }
+                    var availCombos = ui._availHCombos;
+                    if (availCombos != null)
+                        for (int i = 0; i < availCombos.Count; i++) combos.Add(availCombos[i]);
+                }
+                catch (Exception ex)
+                {
+                    if (!_loggedPopulateError)
+                    {
+                        _loggedPopulateError = true;
+                        Plugin.Logger.LogWarning("Couldn't have the game list P2's Evolutions and Fusions (" + ex.Message + "); P2 gets Fission and simple Fusions.");
+                    }
+                }
+            }
+            if (!populated)
+            {
+                for (int i = 0; i < _heroes.Count; i++)
+                    for (int j = i + 1; j < _heroes.Count; j++)
+                    {
+                        HeroInst a = _heroes[i], b = _heroes[j];
+                        if (a == null || b == null) continue;
+                        if (SafeCall(() => a.CanCombine(b), false) && !SafeCall(() => a.IsBadCombo(b), true))
+                            combos.Add(new HeroCombo(i, a.Type, j, b.Type));
+                    }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogOnce(ex);
+        }
+        finally
+        {
+            NativePlayerContext.ExitContext(previous);
+            save.CurHealth = health;
+        }
+        if (populated)
+        {
+            try
+            {
+                ui!.PopulateUpgrades();
+            }
+            catch
+            {
+                // P1's lists are rebuilt when the screen next opens
+            }
+        }
+    }
+
+    private static HeroInst? BallOfType(HeroType type, int index)
+    {
+        if (index >= 0 && index < HeroMirror.Count && HeroMirror[index].Type == type) return HeroMirror[index];
+        foreach (HeroInst hero in HeroMirror)
+            if (hero.Type == type) return hero;
+        return null;
+    }
+
+    private static string BallName(HeroInst hero)
+    {
+        HeroInfo? info = hero.GetInfo();
+        return info == null ? Pretty(hero.Type.ToString()) : NameOf(info);
+    }
+
+    /// <summary>Everything of P2's that can still level up, as upgrade choices.</summary>
+    private static List<LoadoutChoice> UpgradableItems()
+    {
+        var items = new List<LoadoutChoice>();
+        foreach (HeroInst hero in HeroMirror)
+        {
+            if (!SafeCanUpgrade(hero)) continue;
+            HeroInfo info = hero.GetInfo();
+            if (info != null) items.Add(new LoadoutChoice { Info = info, IsBall = true, Hero = hero, FromLevel = hero.Lvl, Name = NameOf(info), Color = ColorOf(info.BallColor) });
+        }
+        foreach (PassiveInst passive in PassiveMirror)
+        {
+            if (!SafeCanUpgrade(passive)) continue;
+            PassiveInfo info = passive.GetInfo();
+            if (info != null) items.Add(new LoadoutChoice { Info = info, Passive = passive, FromLevel = passive.Lvl, Name = NameOf(info), Color = ColorOf(info.MainColor) });
+        }
+        return items;
     }
 
     private static List<LoadoutChoice> BuildChoices(PickKind kind)
@@ -683,7 +871,7 @@ internal static class PlayerTwoLoadout
         List<LoadoutChoice>? offer = _offer;
         if (offer == null || index < 0 || index >= offer.Count) return;
         LoadoutChoice choice = offer[index];
-        bool applied = Apply(p2, choice);
+        bool applied = choice.Fuser == FuserOption.None ? Apply(p2, choice) : ApplyFuser(p2, choice);
         if (!applied)
         {
             // Offer something fresh instead of getting stuck on a choice that doesn't apply.
@@ -695,6 +883,127 @@ internal static class PlayerTwoLoadout
         _offer = null;
         _jsonDirty = true;
         Plugin.Logger.LogInfo($"P2 picked {choice.Label}.");
+        if (choice.Fuser == FuserOption.None) SetNews($"P2 picked {choice.Label}.");
+    }
+
+    private static void SetNews(string text)
+    {
+        _news = text;
+        _newsAt = HostServer.Now;
+        _newsId = (_newsId + 1) & 0x3fffffff;
+        _jsonDirty = true;
+        Plugin.Logger.LogInfo(text);
+    }
+
+    private static bool ApplyFuser(Player p2, LoadoutChoice choice)
+    {
+        if (choice.Fuser == FuserOption.Fission)
+        {
+            int levels = Rng.Next(1, 6);
+            var got = new List<string>();
+            for (int i = 0; i < levels; i++)
+            {
+                List<LoadoutChoice> items = UpgradableItems();
+                if (items.Count == 0) break;
+                LoadoutChoice item = items[Rng.Next(items.Count)];
+                if (!Apply(p2, item)) break;
+                got.Add($"{item.Name} Lv {item.FromLevel + 2}");
+            }
+            if (got.Count == 0) return false;
+            SetNews($"P2's Fission: +{got.Count} upgrade level{(got.Count == 1 ? "" : "s")} ({string.Join(", ", got)}).");
+            return true;
+        }
+
+        string before = Signature();
+        RunForPlayerTwo(p2, choice.Label, mgr =>
+        {
+            if (choice.Fuser == FuserOption.Fusion) mgr.CombineHeroes(CurrentCombo(choice.Combo));
+            else mgr.ApplyUpgrade(choice.Merge!);
+        });
+        bool applied = Signature() != before;
+        if (applied) SetNews($"P2's {choice.Label}.");
+        else Plugin.Logger.LogWarning($"P2's {choice.Label} didn't take; offering the fuser's choices again.");
+        return applied;
+    }
+
+    /// <summary>The fusion's balls by where they are in P2's list now.</summary>
+    private static HeroCombo CurrentCombo(HeroCombo combo)
+    {
+        int first = IndexOfBall(combo.H1, combo.Idx1, -1);
+        int second = IndexOfBall(combo.H2, combo.Idx2, first);
+        return first < 0 || second < 0 ? combo : new HeroCombo(first, combo.H1, second, combo.H2);
+    }
+
+    private static int IndexOfBall(HeroType type, int hint, int skip)
+    {
+        if (hint >= 0 && hint < HeroMirror.Count && hint != skip && HeroMirror[hint].Type == type) return hint;
+        for (int i = 0; i < HeroMirror.Count; i++)
+            if (i != skip && HeroMirror[i].Type == type) return i;
+        return -1;
+    }
+
+    /// <summary>P2's balls and passives with their levels, to see whether something changed them.</summary>
+    private static string Signature()
+    {
+        var sb = new StringBuilder();
+        foreach (HeroInst hero in HeroMirror) sb.Append(hero.Type.ToString()).Append(':').Append(hero.Lvl).Append(' ');
+        sb.Append('|');
+        foreach (PassiveInst passive in PassiveMirror) sb.Append(passive.Type.ToString()).Append(':').Append(passive.Lvl).Append(' ');
+        return sb.ToString();
+    }
+
+    /// <summary>Runs a change to P2's things in P2's context, then brings P2's stats and P1's HUD up to date.</summary>
+    private static void RunForPlayerTwo(Player p2, string what, Action<UpgradeMgr> change)
+    {
+        BattleSaveData save = BattleSaveData.I;
+        UpgradeMgr mgr = UpgradeMgr.I;
+        if (save == null || mgr == null || _heroes == null || _passives == null) return;
+        float health = save.CurHealth;
+        _recomputing = true;
+        Player previous = NativePlayerContext.EnterPlayerTwoContext(p2);
+        try
+        {
+            if (!_swappedIn) throw new InvalidOperationException("P2's balls and passives weren't swapped in.");
+            try
+            {
+                change(mgr);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogWarning($"The game couldn't apply {what} for P2: {ex.Message}");
+            }
+            RefreshMirrors();
+            RegisterWithLocalCoop();
+            mgr.CalculateStats();
+            _maxHealth = mgr.MaxHealth;
+            _statsDirty = false;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Logger.LogError($"Couldn't give P2 {what}: {ex}");
+        }
+        finally
+        {
+            NativePlayerContext.ExitContext(previous);
+            save.CurHealth = health;
+            _recomputing = false;
+        }
+        RefreshPlayerOneHud(mgr, heroes: true, passives: true);
+    }
+
+    // Anything that refreshed while P2's things were swapped in (the HUD's ball icons, say) showed
+    // P2's; refresh it again for P1.
+    private static void RefreshPlayerOneHud(UpgradeMgr mgr, bool heroes, bool passives)
+    {
+        try
+        {
+            if (heroes) mgr.OnHeroesChanged?.Invoke();
+            if (passives) mgr.OnPassivesChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Plugin.Logger.LogDebug("Refreshing P1's HUD after P2's pick: " + ex.Message);
+        }
     }
 
     private static bool Apply(Player p2, LoadoutChoice choice)
@@ -712,7 +1021,7 @@ internal static class PlayerTwoLoadout
             if (!_swappedIn) throw new InvalidOperationException("P2's balls and passives weren't swapped in.");
             try
             {
-                mgr.ApplyUpgrade(new UpgradeChoice(choice.Info, choice.IsNew));
+                mgr.ApplyUpgrade(new UpgradeChoice(choice.Info!, choice.IsNew));
             }
             catch (Exception ex)
             {
@@ -742,17 +1051,7 @@ internal static class PlayerTwoLoadout
             _recomputing = false;
         }
 
-        // Anything that refreshed while P2's things were swapped in (the HUD's ball icons, say) showed
-        // P2's; refresh it again for P1.
-        try
-        {
-            if (choice.IsBall) mgr.OnHeroesChanged?.Invoke();
-            else mgr.OnPassivesChanged?.Invoke();
-        }
-        catch (Exception ex)
-        {
-            Plugin.Logger.LogDebug("Refreshing P1's HUD after P2's pick: " + ex.Message);
-        }
+        RefreshPlayerOneHud(mgr, heroes: choice.IsBall, passives: !choice.IsBall);
         if (!applied) Plugin.Logger.LogWarning($"P2's pick ({choice.Label}) didn't take; offering new choices.");
         return applied;
     }
@@ -760,6 +1059,7 @@ internal static class PlayerTwoLoadout
     private static bool IsApplied(LoadoutChoice choice, int oldLevel)
     {
         if (!choice.IsNew) return (choice.Hero?.Lvl ?? choice.Passive?.Lvl ?? 0) > oldLevel;
+        if (choice.Info == null) return false;
         return choice.IsBall
             ? choice.Info is HeroInfo hero ? OwnsBall(hero.Type) : OwnsBallInfo(choice.Info)
             : choice.Info is PassiveInfo passive ? OwnsPassive(passive.Type) : OwnsPassiveInfo(choice.Info);
@@ -778,6 +1078,7 @@ internal static class PlayerTwoLoadout
             else if (choice.Passive != null) choice.Passive.Lvl++;
             return;
         }
+        if (choice.Info == null) return;
         if (choice.IsBall) mgr.AddHero(new HeroInfo(choice.Info.Pointer).Type, 0);
         else _passives!.Add(new PassiveInst(new PassiveInfo(choice.Info.Pointer).Type));
     }
@@ -825,7 +1126,7 @@ internal static class PlayerTwoLoadout
             HeroInst hero = HeroMirror[i];
             HeroInfo info = hero.GetInfo();
             if (i > 0) sb.Append(',');
-            Item(sb, info == null ? Pretty(hero.Type.ToString()) : NameOf(info), info == null ? "#ffffff" : ColorOf(info.BallColor), hero.Lvl, !SafeCanUpgrade(hero));
+            Item(sb, info == null ? Pretty(hero.Type.ToString()) : NameOf(info), info == null ? "#ffffff" : ColorOf(info.BallColor), hero.Lvl + 1, !SafeCanUpgrade(hero));
         }
         sb.Append("],\"passives\":[");
         for (int i = 0; i < PassiveMirror.Count; i++)
@@ -833,13 +1134,13 @@ internal static class PlayerTwoLoadout
             PassiveInst passive = PassiveMirror[i];
             PassiveInfo info = passive.GetInfo();
             if (i > 0) sb.Append(',');
-            Item(sb, info == null ? Pretty(passive.Type.ToString()) : NameOf(info), info == null ? "#ffffff" : ColorOf(info.MainColor), passive.Lvl, !SafeCanUpgrade(passive));
+            Item(sb, info == null ? Pretty(passive.Type.ToString()) : NameOf(info), info == null ? "#ffffff" : ColorOf(info.MainColor), passive.Lvl + 1, !SafeCanUpgrade(passive));
         }
         sb.Append(']');
         if (_offer != null)
         {
             sb.Append(",\"offer\":{\"id\":").Append(_offerId.ToString(CultureInfo.InvariantCulture))
-              .Append(",\"kind\":\"").Append(_offerKind switch { PickKind.Ball => "ball", PickKind.Passive => "passive", _ => "any" })
+              .Append(",\"kind\":\"").Append(_offerKind switch { PickKind.Ball => "ball", PickKind.Passive => "passive", PickKind.Fuser => "fuser", _ => "any" })
               .Append("\",\"wait\":").Append(_queuedChoice >= 0 ? "true" : "false").Append(",\"choices\":[");
             for (int i = 0; i < _offer.Count; i++)
             {
@@ -848,11 +1149,19 @@ internal static class PlayerTwoLoadout
                 sb.Append("{\"name\":").Append(HostServer.JsonString(c.Name))
                   .Append(",\"ball\":").Append(c.IsBall ? "true" : "false")
                   .Append(",\"new\":").Append(c.IsNew ? "true" : "false")
-                  .Append(",\"lvl\":").Append((c.IsNew ? 1 : c.FromLevel + 1).ToString(CultureInfo.InvariantCulture))
-                  .Append(",\"color\":").Append(HostServer.JsonString(c.Color)).Append('}');
+                  .Append(",\"lvl\":").Append((c.IsNew ? 1 : c.FromLevel + 2).ToString(CultureInfo.InvariantCulture))
+                  .Append(",\"color\":").Append(HostServer.JsonString(c.Color));
+                if (c.Fuser != FuserOption.None)
+                    sb.Append(",\"opt\":\"").Append(c.Fuser.ToString().ToLowerInvariant())
+                      .Append("\",\"desc\":").Append(HostServer.JsonString(c.Description));
+                sb.Append('}');
             }
             sb.Append("]}");
         }
+        string news = News;
+        if (news.Length > 0)
+            sb.Append(",\"news\":{\"id\":").Append(_newsId.ToString(CultureInfo.InvariantCulture))
+              .Append(",\"text\":").Append(HostServer.JsonString(news)).Append('}');
         return sb.Append('}').ToString();
     }
 
@@ -864,7 +1173,7 @@ internal static class PlayerTwoLoadout
           .Append(",\"max\":").Append(max ? "true" : "false").Append('}');
     }
 
-    /// <summary>"Frost (2), Bleed (1)" for the host's panel.</summary>
+    /// <summary>"Frost Lv 2, Bleed Lv 1" for the host's panel.</summary>
     public static string DescribeBalls() => Describe(HeroMirror, h => h.GetInfo(), h => h.Type.ToString(), h => h.Lvl);
 
     public static string DescribePassives() => Describe(PassiveMirror, p => p.GetInfo(), p => p.Type.ToString(), p => p.Lvl);
@@ -886,7 +1195,7 @@ internal static class PlayerTwoLoadout
             {
                 name = "?";
             }
-            parts.Add($"{name} ({level(item)})");
+            parts.Add($"{name} Lv {level(item) + 1}");
         }
         return string.Join(", ", parts);
     }

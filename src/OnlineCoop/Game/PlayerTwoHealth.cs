@@ -260,7 +260,7 @@ internal static class PlayerTwoHealth
         Vector3 screen = cam.WorldToScreenPoint(NativePlayerContext.GetPlayerPosition(p2));
         if (screen.z < 0) return;
         string text = _downed ? $"P2 DOWN {Math.Ceiling(DownedSecondsLeft):0}s" : $"P2 {Math.Ceiling(_health):0}/{_max:0}";
-        if (PlayerTwoLoadout.PicksWaiting > 0) text += " LV UP";
+        if (PlayerTwoLoadout.PicksWaiting > 0) text += PlayerTwoLoadout.NextPickIsFuser || PlayerTwoLoadout.OfferIsFuser ? " FUSER" : " LV UP";
         GUI.Button(new Rect(screen.x - 75f, Screen.height - screen.y - 90f, 150f, 22f), text);
     }
 }

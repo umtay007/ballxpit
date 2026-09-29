@@ -67,6 +67,7 @@
 
   #lvl { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(760px, calc(100% - 24px)); background: #0b0b10e6; border: 1px solid #ffcc3366; border-radius: 14px; padding: 10px 12px 12px; box-shadow: 0 10px 40px #000a; }
   #lvl[hidden] { display: none; }
+  #lvl.fuser { border-color: #ff9d4d88; }
   .lvl-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 8px; }
   .lvl-title { font-weight: 700; color: var(--accent); }
   .lvl-note { color: var(--muted); font-size: 13px; }
@@ -345,6 +346,7 @@
 
   // ---------- P2's balls, passives and level-up picks ----------
   let loadout = null;
+  let lastNews = -1;
   let pickedOffer = -1;
   let padSel = 0;
   const safeColor = (c) => (/^#[0-9a-f]{6}$/i.test(c || '') ? c : '#ffffff');
@@ -374,6 +376,10 @@
     }
     kit.hidden = items.length === 0;
 
+    if (l.news && l.news.id !== lastNews) {
+      lastNews = l.news.id;
+      toast(l.news.text, 6000);
+    }
     const offer = l.offer;
     tray.hidden = !offer;
     document.body.classList.toggle('picking', !!offer);
@@ -381,11 +387,14 @@
     requestAnimationFrame(() => document.body.style.setProperty('--tray', tray.offsetHeight + 'px'));
     const mine = role === 'player';
     const picked = pickedOffer === offer.id;
-    $('lvlTitle').textContent = mine ? 'Level up! Pick one' : 'P2 is picking an upgrade';
+    const fuser = offer.kind === 'fuser';
+    $('lvlTitle').textContent = fuser ? (mine ? 'Fuser! Pick one' : 'P2 is using a fuser')
+      : mine ? 'Level up! Pick one' : 'P2 is picking an upgrade';
     const more = l.picks > 1 ? ` · ${l.picks - 1} more after this` : '';
     $('lvlNote').textContent = (offer.wait ? 'applies when the host’s level-up screen closes'
       : picked ? 'picked…'
       : offer.kind === 'ball' ? 'bonus ball' : offer.kind === 'passive' ? 'bonus passive' : '') + more;
+    $('lvl').classList.toggle('fuser', fuser);
     if (padSel >= offer.choices.length) padSel = 0;
     const cards = $('lvlCards');
     cards.replaceChildren();
@@ -403,7 +412,7 @@
       name.textContent = c.name;
       const sub = document.createElement('div');
       sub.className = 'lvl-sub';
-      sub.textContent = c.new ? (c.ball ? 'New ball' : 'New passive') : `${c.ball ? 'Ball' : 'Passive'} → Lv ${c.lvl}`;
+      sub.textContent = c.desc ? c.desc : c.new ? (c.ball ? 'New ball' : 'New passive') : `${c.ball ? 'Ball' : 'Passive'} → Lv ${c.lvl}`;
       text.append(name, sub);
       b.append(key, orb(c, !c.ball), text);
       b.addEventListener('click', () => pick(i));
