@@ -38,15 +38,18 @@ internal static class SyncTest
     /// <summary>The fingerprint of a generator just made with <see cref="TestSeed"/>, worked out outside the game.</summary>
     private const uint TestSeedFingerprint = 3695218007;
     /// <summary>
+    /// 6: the physics clock is set when the fight starts and saved.
     /// 5: generator fingerprints read exactly the seed table (4 read past its end, so identical
     /// generators could differ). 4: the game clock is set when the run starts and saved; the game thread's own generator is
     /// fingerprinted; structs and enums inside generators count. 3: frame 0 is when the fight starts
     /// with P2 released from its walk-in and the extra random number generators reseeded.
     /// 2: generators fingerprinted by their whole state. 1 read nothing.
     /// </summary>
-    private const int RecordingFormat = 5;
+    private const int RecordingFormat = 6;
     /// <summary>The game clock a run starts from is at least this (seconds), and a power of two above what it was.</summary>
     private const float MinGameClock = 1024f;
+    /// <summary>The same for the physics clock, which starts over with each level and is set when the fight starts.</summary>
+    private const float MinPhysicsClock = 8f;
     public const int TestFrames = 60 * FixedFrameClock.FramesPerSecond;
     private const int MaxWaitForPlayerTwo = 2 * FixedFrameClock.FramesPerSecond;
     private const int MaxStartFrames = 180 * FixedFrameClock.FramesPerSecond;
@@ -74,7 +77,7 @@ internal static class SyncTest
     private static readonly Dictionary<string, (int Frame, string Text)> GroupMismatch = new();
     private static int _waitedForPlayerTwo;
     private static string _endReason = "";
-    private static float _gameClock;
+    private static float _gameClock, _physicsClock;
     private static string _clockNote = "";
     private static bool _seedBeforeLayout;
     private static bool _loggedLevelRandom;
@@ -148,6 +151,7 @@ internal static class SyncTest
         _waitedForPlayerTwo = 0;
         _endReason = "";
         _gameClock = 0;
+        _physicsClock = 0;
         _clockNote = "";
         _seedBeforeLayout = false;
         _loggedLevelRandom = false;
@@ -160,6 +164,14 @@ internal static class SyncTest
         DrawSamples.Clear();
         Details.Clear();
         CheckFingerprints();
+        try
+        {
+            Detail(NativeStacks.Prepare());
+        }
+        catch (Exception ex)
+        {
+            Detail("stack table failed: " + ex.Message);
+        }
         _saveWhenArmed = BattleSaveData.I?.Pointer ?? IntPtr.Zero;
         _phase = Phase.WaitingForRun;
         _status = mode == SyncTestMode.Record
@@ -260,23 +272,14 @@ internal static class SyncTest
         string stack;
         try
         {
-            stack = GameStackTrace();
+            stack = NativeStacks.Describe();
         }
         catch (Exception ex)
         {
             stack = "(no stack: " + ex.Message + ")";
         }
-        IEnumerable<string> frames = stack.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0)
-            .Where(l => !l.Contains("Environment", StringComparison.Ordinal) && !l.Contains("StackTrace", StringComparison.Ordinal))
-            .Select(l => l.StartsWith("at ", StringComparison.Ordinal) ? l.Substring(3) : l)
-            .Select(l => { int cut = l.IndexOf(" [0x", StringComparison.Ordinal); return cut > 0 ? l.Substring(0, cut) : l; })
-            .Take(10);
-        DrawSamples.Enqueue($"{(main ? "game thread" : "other thread")} {thread} \"{ThreadName()}\", draw {n}: {string.Join(" <- ", frames)}");
+        DrawSamples.Enqueue($"{(main ? "game thread" : "other thread")} {thread} \"{ThreadName()}\", draw {n}: {stack}");
     }
-
-    /// <summary>Separate, so a runtime without Environment.StackTrace fails here, where it's caught.</summary>
-    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-    private static string GameStackTrace() => Il2CppSystem.Environment.StackTrace ?? "";
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
     private static extern IntPtr GetCurrentThread();
@@ -423,6 +426,26 @@ internal static class SyncTest
     /// <see cref="MinGameClock"/>, never earlier than the clock already was (timers the game set
     /// before just run out), and the recording's when checking.
     /// </summary>
+    /// <summary>
+    /// TimeMgr's physics clock restarts with each level but has run a different time by the fight's
+    /// first frame (1.42 s one run, 1.30 s the next), and ball movement rounds differently at different
+    /// values: start it at an agreed value too.
+    /// </summary>
+    private static void SetPhysicsClock(TimeMgr time)
+    {
+        float now = time._physicsTime;
+        double wanted = MinPhysicsClock;
+        while (wanted < now + 1) wanted *= 2;
+        float reference = _reference?.PhysicsClock ?? 0;
+        if (reference > 0)
+        {
+            if (reference >= now + 0.5f) wanted = reference;
+            else _clockNote = $"the level took longer to load than in the recording (physics clock {now:0.##} s)";
+        }
+        time._physicsTime = (float)wanted;
+        _physicsClock = (float)wanted;
+    }
+
     private static void SetGameClock()
     {
         TimeMgr time = TimeMgr.I;
@@ -658,7 +681,9 @@ internal static class SyncTest
         TimeMgr time = TimeMgr.I;
         if (time != null)
         {
-            Detail(FormattableString.Invariant($"fight starts: game clock {time._gameTime} s, physics clock {time._physicsTime} s, fixed-step leftover {time._timeDebt} s (cleared)."));
+            float physicsBefore = time._physicsTime;
+            SetPhysicsClock(time);
+            Detail(FormattableString.Invariant($"fight starts: game clock {time._gameTime} s, physics clock {physicsBefore} s (set to {time._physicsTime} s), fixed-step leftover {time._timeDebt} s (cleared)."));
             time._timeDebt = 0f;
         }
         _gameTimeAtStart = time != null ? time._gameTime : 0;
@@ -792,7 +817,7 @@ internal static class SyncTest
         {
             try
             {
-                new Recording(_setup, Frames, _startFrames, reason, _seedForced, _stabilized, _clockFixed, _gameClock).Save(RecordingPath);
+                new Recording(_setup, Frames, _startFrames, reason, _seedForced, _stabilized, _clockFixed, _gameClock, _physicsClock).Save(RecordingPath);
                 _status = $"Recorded {Seconds(Frames.Count)} s (stopped because {reason}).{caveat}";
                 ReportLines.Add(_status);
                 ReportLines.Add("Next: click \"Check\", then start a NEW run with the same character and level (or Restart from the pause menu), hands off.");
@@ -843,7 +868,7 @@ internal static class SyncTest
             sb.AppendLine($"BALLxPIT Online Co-op {Plugin.PluginVersion} sync test, {DateTime.Now:yyyy-MM-dd HH:mm}, mode {_mode}");
             foreach (string line in ReportLines) sb.AppendLine(line);
             sb.AppendLine($"Ended because: {reason}. Frames: {Frames.Count}. Loading frames: {_startFrames}. Waited for P2: {_waitedForPlayerTwo}. Mismatched frames: {_mismatchedFrames}.");
-            sb.AppendLine($"Seed fixed: {_seedForced} ({(_seedBeforeLayout ? "before" : "after")} the level was laid out). Random numbers reseeded: {_stabilized}. Frame clock fixed: {_clockFixed}. Game clock: {_gameClock.ToString(CultureInfo.InvariantCulture)} s.");
+            sb.AppendLine($"Seed fixed: {_seedForced} ({(_seedBeforeLayout ? "before" : "after")} the level was laid out). Random numbers reseeded: {_stabilized}. Frame clock fixed: {_clockFixed}. Game clock: {_gameClock.ToString(CultureInfo.InvariantCulture)} s. Physics clock: {_physicsClock.ToString(CultureInfo.InvariantCulture)} s.");
             sb.AppendLine("Details:");
             foreach (string line in Details) sb.AppendLine("  " + line);
             sb.AppendLine("Setup here:");
@@ -899,11 +924,12 @@ internal static class SyncTest
         public readonly int StartFrames;
         public readonly string EndReason;
         public readonly bool SeedForced, Stabilized, ClockFixed;
-        public readonly float GameClock;
+        public readonly float GameClock, PhysicsClock;
 
-        public Recording(List<(string, string)> setup, List<double[]> frames, int startFrames, string endReason, bool seedForced, bool stabilized, bool clockFixed, float gameClock)
+        public Recording(List<(string, string)> setup, List<double[]> frames, int startFrames, string endReason, bool seedForced, bool stabilized, bool clockFixed, float gameClock, float physicsClock)
         {
             GameClock = gameClock;
+            PhysicsClock = physicsClock;
             Setup = setup;
             Frames = frames;
             StartFrames = startFrames;
@@ -952,6 +978,7 @@ internal static class SyncTest
             json.WriteBoolean("stabilized", Stabilized);
             json.WriteBoolean("clockFixed", ClockFixed);
             json.WriteNumber("gameClock", GameClock);
+            json.WriteNumber("physicsClock", PhysicsClock);
             json.WriteNumber("startFrames", StartFrames);
             json.WriteString("end", EndReason);
             json.WriteStartArray("setup");
@@ -992,7 +1019,7 @@ internal static class SyncTest
                 .Select(f => f.EnumerateArray().Select(v => v.GetDouble()).ToArray()).ToList();
             return new Recording(setup, frames, root.GetProperty("startFrames").GetInt32(), root.GetProperty("end").GetString() ?? "",
                 root.GetProperty("seedForced").GetBoolean(), root.GetProperty("stabilized").GetBoolean(), root.GetProperty("clockFixed").GetBoolean(),
-                root.GetProperty("gameClock").GetSingle());
+                root.GetProperty("gameClock").GetSingle(), root.GetProperty("physicsClock").GetSingle());
         }
     }
 }

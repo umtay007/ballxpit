@@ -1,4 +1,4 @@
-BALLxPIT Online Co-op 0.1.10
+BALLxPIT Online Co-op 0.1.11
 ============================
 Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
@@ -108,7 +108,7 @@ both PCs when it gets the same start and the same controls. The sync test finds 
 connect anything yet; it tells us whether the approach can work, and if not, what goes wrong.
 
 For each test run the mod makes every frame exactly 1/60 s long, fixes the run's random seed,
-starts the game's clock at an agreed time, puts P2 on its exact starting spot, and plays for you
+starts the game's clocks at agreed times, puts P2 on its exact starting spot, and plays for you
 (stand still, aim up, keep shooting). Don't touch mouse, keyboard or controller during a run. It
 stops after a minute, at your first level-up, or if you die or pause. Recordings from older
 versions don't work with this one: record again.
