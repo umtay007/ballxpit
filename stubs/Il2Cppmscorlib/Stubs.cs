@@ -13,6 +13,12 @@ namespace Il2CppSystem
         public Type(IntPtr pointer) : base(pointer) { }
     }
 
+    public class Random : Object
+    {
+        public Random(IntPtr pointer) : base(pointer) { }
+        public Random(int Seed) : base(IntPtr.Zero) => throw null;
+    }
+
     public class Delegate : Object
     {
         public Delegate(IntPtr pointer) : base(pointer) { }

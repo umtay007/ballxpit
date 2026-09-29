@@ -149,6 +149,7 @@ internal static class OnlineController
 
     private static void OnEndOfFrame()
     {
+        Sync.SyncTest.OnEndOfFrame();
         try
         {
             VideoStreamer? video = _host?.Video;
@@ -309,6 +310,7 @@ internal static class OnlineController
                 Plugin.Logger.LogInfo("Online co-op on-screen button is being drawn.");
             }
             PlayerTwoHealth.DrawLabel();
+            Sync.SyncTest.DrawBanner();
             if (_panelVisible) DrawPanel();
             else if (IsHosting || PlayerTwoLoadout.Offer != null || (OnlineConfig.ShowMenuButton.Value && !PlayerTwoBridge.IsPlayerTwoActive())) DrawBadge();
         }
@@ -317,6 +319,49 @@ internal static class OnlineController
             if (_loggedGuiError) return;
             _loggedGuiError = true;
             Plugin.Logger.LogError("Online co-op panel failed to draw: " + ex);
+        }
+    }
+
+    private static bool _syncExpanded;
+
+    /// <summary>The "two PCs" section: step one is the sync test.</summary>
+    private static void DrawSyncTest(float x, ref float y, float width)
+    {
+        bool active = Sync.SyncTest.IsActive;
+        bool Button(Rect r, string text) => GUI.Button(r, text);
+        float step = RowHeight + RowGap;
+        if (!_syncExpanded && !active)
+        {
+            if (Button(new Rect(x, y, width, RowHeight), "Playing on two PCs (you both own the game): step 1, the sync test  ▸")) _syncExpanded = true;
+            y += step;
+            return;
+        }
+        if (Button(new Rect(x, y, width, RowHeight), "Sync test: can two PCs run the same fight in step?  ▾")) _syncExpanded = false;
+        y += step;
+        if (active)
+        {
+            if (Button(new Rect(x, y, width, RowHeight), "Stop the test")) Sync.SyncTest.Stop();
+            y += step;
+            return;
+        }
+        float half = (width - RowGap) / 2f;
+        bool guestPlaying = _host?.Server?.HasPlayer == true;
+        if (Button(new Rect(x, y, half, RowHeight), "1. Record a test run")) Sync.SyncTest.Begin(Sync.SyncTestMode.Record, guestPlaying);
+        if (Button(new Rect(x + half + RowGap, y, half, RowHeight), Sync.SyncTest.HasRecording ? "2. Check against the recording" : "2. Check (record first)"))
+            Sync.SyncTest.Begin(Sync.SyncTestMode.Check, guestPlaying);
+        y += step;
+        IReadOnlyList<string> report = Sync.SyncTest.Report;
+        if (report.Count == 0)
+        {
+            string text = Sync.SyncTest.Status.Length > 0 ? Sync.SyncTest.Status
+                : "Record, then check on this PC. Then your friend checks your recording on theirs. Each run takes a minute, hands off.";
+            Button(new Rect(x, y, width, RowHeight), text);
+            y += step;
+        }
+        foreach (string line in report)
+        {
+            Button(new Rect(x, y, width, RowHeight), line);
+            y += step;
         }
     }
 
@@ -369,6 +414,8 @@ internal static class OnlineController
                 y += RowHeight + RowGap;
             }
         }
+
+        DrawSyncTest(x, ref y, width);
 
         OnlineHost? host = _host;
         HostServer? server = host?.Server;

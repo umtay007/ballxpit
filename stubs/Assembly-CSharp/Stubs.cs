@@ -10,6 +10,7 @@ public class Player : MonoBehaviour
     public Il2CppReferenceArray<PlayerCharController> CharControllers => throw null;
     public Vector3 GetMouseWorldPos() => throw null;
     public Vector2 GetLastAimDir() => throw null;
+    public Vector2 _lastAimDir { get => throw null; set => throw null; }
     public EnemyAttackResult Damage(float amt, PieceDmgType dmgType) => throw null;
     public void Heal(float amt) => throw null;
 }
@@ -26,6 +27,16 @@ public class BattleSaveData : Il2CppSystem.Object
     public List<HeroInst> Heroes { get => throw null; set => throw null; }
     public List<PassiveInst> Passives { get => throw null; set => throw null; }
     public List<UpgradeInfo> BanishedItems { get => throw null; set => throw null; }
+    public CharBattleInst CurChar { get => throw null; set => throw null; }
+    public LevelType CurLevel { get => throw null; set => throw null; }
+    public int CurDifficulty { get => throw null; set => throw null; }
+    public int CurNGPlusLvl { get => throw null; set => throw null; }
+    public int CurTurn { get => throw null; set => throw null; }
+    public int NumKills { get => throw null; set => throw null; }
+    public float CurXP { get => throw null; set => throw null; }
+    public List<GridPieceInst> Pieces { get => throw null; set => throw null; }
+    public List<PickupInst> Pickups { get => throw null; set => throw null; }
+    public int Seed { get => throw null; set => throw null; }
     public int UpgradeLvl { get => throw null; set => throw null; }
 }
 
@@ -171,7 +182,81 @@ public class TimeMgr : MonoBehaviour
 {
     public TimeMgr(IntPtr pointer) : base(pointer) { }
     public static TimeMgr I { get => throw null; set => throw null; }
+    public float _gameTime { get => throw null; set => throw null; }
+    public float _physicsTime { get => throw null; set => throw null; }
+    public float _gameSpeed { get => throw null; set => throw null; }
+    public float _defaultFixedDeltaTime { get => throw null; set => throw null; }
+    public float _gameFixedDeltaTime { get => throw null; set => throw null; }
     public float GetTime() => throw null;
+    public void RunFixedUpdate(float fixedDeltaTime) => throw null;
+}
+
+public enum GameState { kPlaying, kGameOver, kLevelUp, kPaused, kPickTreasure, kFoundBlueprint, kBonusBall, kBonusPassive, kFoundEgg, kRevive, kEndingGame, kEnteringLvl, kNum }
+
+public enum LoadMode { kNewGame, kLoad, kUndo, kResetFloor }
+
+public enum LevelType { }
+
+public enum CharType { }
+
+public enum GameActionType
+{
+    kShoot, kAimHorizontal, kPause, kMoveHorizontal, kAimVertical, kMoveVertical, kAutofire, kIncreaseSpeed, kDecreaseSpeed, kLevelUp,
+    kGrabModifier, kRotateCW, kRotateCCW, kWorkerDetails, kZoomIn, kZoomOut, kShowUpgradeable, kShowFullyUpgraded, kDismantleBuilding,
+    kSpeedUpHarvest, kCancelHarvest, kOpenSidebar, kNum,
+}
+
+// Real base class is BaseMgr.
+public class GameMgr : MonoBehaviour
+{
+    public GameMgr(IntPtr pointer) : base(pointer) { }
+    public static GameMgr I { get => throw null; set => throw null; }
+    public GameState CurState { get => throw null; set => throw null; }
+}
+
+public class GridMgr : MonoBehaviour
+{
+    public GridMgr(IntPtr pointer) : base(pointer) { }
+    public static GridMgr I { get => throw null; set => throw null; }
+    public Il2CppSystem.Random LvlRnd { get => throw null; set => throw null; }
+    public Il2CppSystem.Random MiscRnd { get => throw null; set => throw null; }
+    public void InitGrid(LoadMode loadMode) => throw null;
+}
+
+public class ThreadSafeRandom : Il2CppSystem.Object
+{
+    public ThreadSafeRandom(IntPtr pointer) : base(pointer) { }
+    public static Il2CppSystem.Random _global { get => throw null; set => throw null; }
+    public static Il2CppSystem.Random _local { get => throw null; set => throw null; }
+}
+
+public class InputMgr : MonoBehaviour
+{
+    public InputMgr(IntPtr pointer) : base(pointer) { }
+    public float GetAxis(GameActionType t) => throw null;
+    public bool IsBtnDown(GameActionType t) => throw null;
+    public bool IsBtnHeld(GameActionType t) => throw null;
+    public bool IsBtnUp(GameActionType t) => throw null;
+}
+
+public class CharBattleInst : Il2CppSystem.Object
+{
+    public CharBattleInst(IntPtr pointer) : base(pointer) { }
+    public CharType Type { get => throw null; set => throw null; }
+    public Il2CppStructArray<int> Stats { get => throw null; set => throw null; }
+}
+
+public class GridPieceInst : Il2CppSystem.Object
+{
+    public GridPieceInst(IntPtr pointer) : base(pointer) { }
+    public float X { get => throw null; set => throw null; }
+    public float Y { get => throw null; set => throw null; }
+    public int CurHealth { get => throw null; set => throw null; }
+}
+
+public class PickupInst : Il2CppSystem.Object
+{
+    public PickupInst(IntPtr pointer) : base(pointer) { }
 }
 
 public class PlayerCharController : MonoBehaviour
@@ -184,5 +269,6 @@ public class BallMgr : MonoBehaviour
 {
     public BallMgr(IntPtr pointer) : base(pointer) { }
     public static BallMgr I => throw null;
+    public List<BallObj> ActiveBalls { get => throw null; set => throw null; }
     public Vector2 MousePosToAimDir(Vector3 mousePos, int idx) => throw null;
 }

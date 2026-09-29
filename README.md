@@ -59,6 +59,15 @@ controller. Players install it with [docs/INSTALL.txt](docs/INSTALL.txt).
   P2's balls hit with P2's stats. P2's numbers come from the game's own `UpgradeMgr.CalculateStats`,
   run inside P2's context. Each rise of `BattleSaveData.UpgradeLvl` gives P2 a pick, offered on the
   guest page and in the panel and applied with `UpgradeMgr.ApplyUpgrade` inside P2's context.
+- **Sync test (towards playing on two PCs).** Lockstep play needs the game to be deterministic:
+  same start + same inputs = same frames. `Game/Sync` checks that. A test run fixes the frame time
+  (`Time.captureDeltaTime` = 1/60 through IL2CPP internal calls, vsync off, 60 fps cap), sets
+  `BattleSaveData.Seed` in a `GridMgr.InitGrid` prefix, reseeds `GridMgr.MiscRnd`, `ThreadSafeRandom`
+  and `UnityEngine.Random`, and replaces P1's `InputMgr` gameplay actions and mouse aim with a fixed
+  pattern. Every frame it records time, players, health/XP, every enemy (`BattleSaveData.Pieces`),
+  every ball, pickups and the random generators' full state, plus a setup fingerprint (character,
+  level, character stats, every `UpgradeMgr` number, balls, passives). A check run compares frame by
+  frame and reports the first difference.
 - **Host panel.** Press F8, or click the "Online Co-op" button in the top-right corner of the menus
   (it also shows that the plugin loaded). It's drawn with IMGUI's `GUI.Button`, the one IMGUI call
   Local Coop already relies on.

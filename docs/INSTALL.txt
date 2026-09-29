@@ -1,4 +1,4 @@
-BALLxPIT Online Co-op 0.1.5
+BALLxPIT Online Co-op 0.1.6
 ===========================
 Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
@@ -90,6 +90,28 @@ Things to know:
 - Quitting and continuing a run later starts P2 over with copies of your current balls.
 Turn it off with SeparateLoadout = false under [Co-op] in the config; P2 then uses copies of your
 balls, as in plain Local Coop.
+
+
+PLAYING ON TWO PCS (WORK IN PROGRESS): THE SYNC TEST
+----------------------------------------------------
+The plan for friends who both own the game: each PC runs the whole game and only the players'
+controls travel over the internet. That only works if the game plays out exactly the same way on
+both PCs when it gets the same start and the same controls. The sync test finds out. It doesn't
+connect anything yet; it tells us whether the approach can work, and if not, what goes wrong.
+
+For each test run the mod makes every frame exactly 1/60 s long, fixes the run's random seed, and
+plays for you (stand still, aim up, keep shooting). Don't touch mouse, keyboard or controller
+during a run. It stops after a minute, at your first level-up, or if you die or pause.
+
+1. F8 > "Playing on two PCs" > "1. Record a test run". Start a NEW run (any character, any
+   level) and wait. It saves BepInEx\sync-test-recording.json.
+2. "2. Check against the recording", then start the SAME character and level again. The panel
+   says IN SYNC, or OUT OF SYNC with the moment and what differed.
+3. Your friend installs the same version, puts your sync-test-recording.json in their BepInEx
+   folder and does step 2 on their PC.
+Send me BepInEx\sync-test-result.txt from each check (and your friend's), whatever it says.
+Different unlocks and upgrades in your saves will show up as "Setup:" lines; that's expected for
+now and useful to know.
 
 
 YOUR FRIEND'S CONTROLS
