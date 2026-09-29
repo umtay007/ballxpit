@@ -45,13 +45,33 @@ internal static class PlayerTwoBridge
         }
     }
 
+    /// <summary>True when the installed Local Coop DLL can also stop P2 shooting (hooks version 2).</summary>
+    public static bool ShotHookInstalled { get; private set; }
+
     // Kept separate so a missing OnlineHooks type fails here, where it is caught.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void InstallHooks()
     {
-        if (OnlineHooks.GetVersion() < 1) throw new InvalidOperationException("hook version");
+        int version = OnlineHooks.GetVersion();
+        if (version < 1) throw new InvalidOperationException("hook version");
         OnlineHooks.RemoteKeyHeld = RemoteKeyHeld;
         OnlineHooks.BeforeApplyInput = BeforeApplyInput;
+        if (version >= 2)
+        {
+            InstallShotHook();
+            ShotHookInstalled = true;
+        }
+        else
+        {
+            Plugin.Logger.LogWarning("The installed BALLxPITLocalCoop.dll is an older online build; a knocked-out P2 can still shoot. Install the one from this download.");
+        }
+    }
+
+    // Only compiled when the DLL has the version 2 field.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void InstallShotHook()
+    {
+        OnlineHooks.AllowPlayerTwoShot = () => !PlayerTwoHealth.IsDowned;
     }
 
     public static void SetServer(HostServer? server)
@@ -83,6 +103,16 @@ internal static class PlayerTwoBridge
             status.PlayerTwoActive = controller != null && controller._playerTwo != null;
             if (controller != null) status.AutoShoot = controller._playerTwoAutoShootEnabled;
             status.AutoShootByCharacter = status.PlayerTwoActive && CharacterRuntimeInfo.AlwaysShoots;
+            if (status.PlayerTwoActive && PlayerTwoHealth.Enabled && PlayerTwoHealth.HasPlayerTwo)
+            {
+                status.Health = PlayerTwoHealth.Health;
+                status.MaxHealth = PlayerTwoHealth.MaxHealth;
+                status.DownedSeconds = PlayerTwoHealth.DownedSecondsLeft;
+            }
+            else
+            {
+                status.Health = -1;
+            }
         }
         catch
         {
@@ -146,8 +176,14 @@ internal static class PlayerTwoBridge
     {
         try
         {
+            if (controller == null || controller._playerTwo == null) return;
+            if (PlayerTwoHealth.IsDowned)
+            {
+                controller._playerTwoMoveDir = new Vector2(0f, 0f); // knocked out: stay put
+                return;
+            }
             RefreshSnapshot();
-            if (!_guestActive || controller == null || controller._playerTwo == null) return;
+            if (!_guestActive) return;
 
             float mx = _input.MoveX, my = _input.MoveY;
             float length = MathF.Sqrt(mx * mx + my * my);

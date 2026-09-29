@@ -18,7 +18,7 @@ controller. Players install it with [docs/INSTALL.txt](docs/INSTALL.txt).
  └───────────────────────────────────────────────┘   (or a direct UPnP / LAN link)
 ```
 
-- **Input.** The build adds two hooks to Local Coop's `PlayerTwoController` (with Mono.Cecil, see
+- **Input.** The build adds hooks to Local Coop's `PlayerTwoController` (with Mono.Cecil, see
   `patcher/`): its `Input.GetKey` reads also see keys the guest holds (Shoot), and
   `UpdatePlayerTwoInput` calls back right before it applies P2's movement and aim. The add-on puts
   the guest's stick into `_playerTwoMoveDir` and the guest's aim, run through the game's own
@@ -33,8 +33,14 @@ controller. Players install it with [docs/INSTALL.txt](docs/INSTALL.txt).
   doesn't cap the frame rate, and fewer as soon as frames start queueing on a slow link, so lag
   stays low. When the connection is what holds the frame rate down, JPEG quality drops and then
   the picture shrinks another step; both climb back when there's room.
-- **Audio.** A component next to the `AudioListener` copies the final mix in `OnAudioFilterRead`
-  and sends 20 ms IMA ADPCM packets (about 390 kbit/s for 48 kHz stereo).
+- **Audio.** BALL x PIT plays sound through FMOD, so a pass-through DSP is added at the head of
+  FMOD's master bus (straight through `fmod.dll`'s exports, with the handle from
+  `FMODUnity.RuntimeManager.CoreSystem`); it copies the final mix and sends 20 ms IMA ADPCM packets
+  (about 390 kbit/s for 48 kHz stereo). A tap next to Unity's `AudioListener` is the fallback.
+- **P2's own health.** Harmony patches on `Player.Damage` / `Player.Heal` swap P2's health into
+  `BattleSaveData.CurHealth` while they run for P2 (first and last in the patch order, so Local
+  Coop's game-over guard sees P2's value). At zero P2 is knocked out for a while: no movement (input
+  bridge), no shots (hook version 2 in `RequestNativePlayerTwoShot`) and no damage.
 - **Host panel.** Press F8, or click the "Online Co-op" button in the top-right corner of the menus
   (it also shows that the plugin loaded). It's drawn with IMGUI's `GUI.Button`, the one IMGUI call
   Local Coop already relies on.

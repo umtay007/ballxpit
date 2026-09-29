@@ -59,6 +59,8 @@ internal static class OnlineController
             Plugin.Logger.LogInfo(_panelVisible ? "Online co-op panel opened." : "Online co-op panel closed.");
         }
 
+        PlayerTwoHealth.Update();
+
         OnlineHost? host = _host;
         HostServer? server = host?.Server;
         if (host == null || server == null) return;
@@ -154,7 +156,8 @@ internal static class OnlineController
             }
             _host = host;
             PlayerTwoBridge.SetServer(host.Server);
-            AudioTap.Target = host.Audio;
+            if (OnlineConfig.StreamAudio.Value && FmodTap.TryInstall()) FmodTap.Target = host.Audio;
+            else AudioTap.Target = host.Audio;
             _tapCamera = null;
             _nextTapCheck = 0;
             Plugin.Logger.LogInfo($"Hosting online co-op on port {host.Server!.Port}. Join code {host.Server.JoinCode}.");
@@ -171,6 +174,7 @@ internal static class OnlineController
         OnlineHost? host = _host;
         _host = null;
         AudioTap.Target = null;
+        FmodTap.Remove();
         PlayerTwoBridge.SetServer(null);
         LoggedLinks.Clear();
         if (host == null) return;
@@ -192,6 +196,7 @@ internal static class OnlineController
         try
         {
             AudioTap.Target = null;
+            FmodTap.Remove();
             PlayerTwoBridge.SetServer(null);
             OnlineHost? host = _host;
             _host = null;
@@ -224,7 +229,7 @@ internal static class OnlineController
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static void KeepAudioTapAttached(OnlineHost host)
     {
-        if (_audioTapBroken || host.Audio == null || !OnlineConfig.StreamAudio.Value) return;
+        if (_audioTapBroken || host.Audio == null || !OnlineConfig.StreamAudio.Value || FmodTap.IsInstalled) return;
         try
         {
             Camera cam = Camera.main;
@@ -280,6 +285,7 @@ internal static class OnlineController
                 _loggedFirstGui = true;
                 Plugin.Logger.LogInfo("Online co-op on-screen button is being drawn.");
             }
+            PlayerTwoHealth.DrawLabel();
             if (_panelVisible) DrawPanel();
             else if (IsHosting || (OnlineConfig.ShowMenuButton.Value && !PlayerTwoBridge.IsPlayerTwoActive())) DrawBadge();
         }
@@ -357,6 +363,9 @@ internal static class OnlineController
                     + (guest.Congested ? "  ·  connection full" : ""));
         }
         if (!PlayerTwoBridge.IsPlayerTwoActive()) Row("P2 appears when a run starts.");
+
+        if (OnlineConfig.StreamAudio.Value && guests.Count > 0)
+            Row("Sound: " + (FmodTap.IsInstalled ? FmodTap.Status : _tapCamera != null ? "Unity audio listener" : FmodTap.Status.Length > 0 ? FmodTap.Status : "not found yet"));
 
         VideoStreamer? video = host.Video;
         if (FrameGrabber.Error != null) Row("! Screen capture: " + FrameGrabber.Error);

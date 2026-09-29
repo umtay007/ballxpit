@@ -85,7 +85,13 @@ while ((DateTime.UtcNow - started).TotalSeconds < runFor)
     }
     int toggles = server.TakeAutoShootToggles();
     if (toggles > 0) Console.WriteLine($"TOGGLE {toggles}");
-    server.SetHostStatus(new HostStatus { PlayerTwoActive = true, AutoShoot = false, Note = "fake host" });
+    // P2 at 75/100; FAKEHOST_DOWN=1 shows P2 knocked out instead.
+    bool fakeDown = Environment.GetEnvironmentVariable("FAKEHOST_DOWN") == "1";
+    server.SetHostStatus(new HostStatus
+    {
+        PlayerTwoActive = true, AutoShoot = false, Note = "fake host",
+        Health = fakeDown ? 0 : 75, MaxHealth = 100, DownedSeconds = fakeDown ? 12 : 0,
+    });
 
     if (host.Video!.ShouldCapture(now))
     {

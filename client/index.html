@@ -59,16 +59,23 @@
   #toast[hidden] { display: block; opacity: 0; pointer-events: none; }
   #waiting { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); pointer-events: none; }
   #waiting[hidden] { display: none; }
+  .pill.hp-low { color: var(--danger); border-color: #ff6b6b66; }
+  #downed { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; background: radial-gradient(transparent 40%, #5a000055); }
+  #downed[hidden] { display: none; }
+  .downed-card { text-align: center; background: #000b; border: 1px solid #ff6b6b66; border-radius: 12px; padding: 14px 22px; }
+  .downed-title { font-size: 22px; font-weight: 700; color: var(--danger); }
 </style>
 </head>
 <body>
 <div id="stage"><canvas id="screen" width="960" height="540" aria-label="The host's game"></canvas></div>
 <div id="waiting" hidden>Waiting for the picture…</div>
+<div id="downed" hidden><div class="downed-card"><div class="downed-title">Knocked out</div><div id="downedText"></div></div></div>
 
 <div id="bar">
   <span class="pill" id="conn"><span class="dot" id="connDot"></span><span id="connText">Offline</span></span>
   <span class="pill" id="role" hidden></span>
   <span class="pill" id="auto" hidden></span>
+  <span class="pill" id="hp" hidden></span>
   <span class="pill" id="stats" hidden></span>
   <span class="spacer"></span>
   <button class="small primary" id="claimBtn" hidden>Play as P2</button>
@@ -270,6 +277,16 @@
   function updateStatus() {
     const s = lastStatus;
     $('claimBtn').hidden = !(role === 'spectator' && s && !s.player);
+    const hp = $('hp');
+    const hasHp = !!(s && s.p2 && s.hp >= 0 && s.hpMax > 0);
+    hp.hidden = !hasHp;
+    const down = hasHp && s.down > 0;
+    if (hasHp) {
+      hp.textContent = down ? `P2 down ${Math.ceil(s.down)}s` : `P2 ♥ ${Math.ceil(s.hp)}/${Math.round(s.hpMax)}`;
+      hp.classList.toggle('hp-low', down || s.hp / s.hpMax < 0.3);
+    }
+    $('downed').hidden = !down;
+    if (down) $('downedText').textContent = (role === 'player' ? 'You' : 'P2') + ` get back up in ${Math.ceil(s.down)} s`;
     const a = $('auto');
     if (s && role === 'player') {
       a.hidden = false;

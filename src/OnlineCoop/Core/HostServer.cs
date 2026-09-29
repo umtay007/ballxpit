@@ -30,6 +30,11 @@ public struct HostStatus
     public bool PlayerTwoActive;
     public bool AutoShoot;
     public bool AutoShootByCharacter;
+    /// <summary>P2's own health, or -1 when P2 shares the host's.</summary>
+    public float Health;
+    public float MaxHealth;
+    /// <summary>Seconds until a knocked-out P2 gets back up; 0 when P2 is up.</summary>
+    public float DownedSeconds;
     public string Note;
 }
 
@@ -540,6 +545,7 @@ public sealed class HostServer : IDisposable
                 string playerName = _player?.Name ?? "";
                 status = "{\"t\":\"status\",\"p2\":" + Bool(_status.PlayerTwoActive) + ",\"auto\":" + Bool(_status.AutoShoot)
                     + ",\"autoChar\":" + Bool(_status.AutoShootByCharacter)
+                    + ",\"hp\":" + Num(_status.Health) + ",\"hpMax\":" + Num(_status.MaxHealth) + ",\"down\":" + Num(_status.DownedSeconds)
                     + ",\"player\":" + JsonString(playerName) + ",\"guests\":" + _sessions.Count(s => s.Joined).ToString(CultureInfo.InvariantCulture)
                     + ",\"note\":" + JsonString(_status.Note ?? "") + "}";
                 foreach (Session s in _sessions)
@@ -586,6 +592,8 @@ public sealed class HostServer : IDisposable
     private static float Clamp(float v, float min, float max) => v < min ? min : v > max ? max : v;
 
     private static string Bool(bool b) => b ? "true" : "false";
+
+    private static string Num(float v) => float.IsFinite(v) ? Math.Round(v, 1).ToString(CultureInfo.InvariantCulture) : "0";
 
     internal static string JsonString(string s)
     {

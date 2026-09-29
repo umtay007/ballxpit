@@ -10,7 +10,7 @@
     <LangVersion>11.0</LangVersion>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <Product>BALLxPIT Online Coop</Product>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
@@ -33,6 +33,7 @@
     <Reference Include="BepInEx.Unity.IL2CPP"><HintPath>$(Root)lib/BepInEx.Unity.IL2CPP.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppInterop.Runtime"><HintPath>$(Root)lib/Il2CppInterop.Runtime.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppInterop.Common"><HintPath>$(Root)lib/Il2CppInterop.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(Root)lib/0Harmony.dll</HintPath><Private>false</Private></Reference>
     <!-- Stand-ins for the game's interop assemblies and the publicized Local Coop reference. -->
     <Reference Include="Il2Cppmscorlib"><HintPath>$(Root)out/stubs/Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(Root)out/stubs/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>

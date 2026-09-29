@@ -1,4 +1,4 @@
-BALLxPIT Online Co-op 0.1.2
+BALLxPIT Online Co-op 0.1.3
 ===========================
 Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
@@ -62,6 +62,15 @@ More people can open the link while P2 is taken; they watch, and get a "Play as 
 the spot frees up. Use "Kick P2", "New code" and "Stop hosting" in the F8 panel.
 
 
+P2'S OWN HEALTH
+---------------
+P2 has its own health, shown above P2 and on your friend's page. When it runs out, P2 is knocked
+out for 20 seconds (can't move, shoot or be hit), then gets back up with half its health. If YOU
+run out, the run ends as usual. When you heal, P2 heals by the same amount. This works for local
+co-op too. Settings are under [Co-op] in BepInEx/config/BALLxPITOnlineCoop.cfg: SeparateHealth,
+DownedSeconds, ReviveHealthPercent, SharedHealing.
+
+
 YOUR FRIEND'S CONTROLS
 ----------------------
   Move                WASD or arrow keys, or the left stick
@@ -88,7 +97,8 @@ IF SOMETHING'S OFF
 - Choppy or blurry picture: your upload is the limit. The mod already lowers quality by itself. In
   BepInEx/config/BALLxPITOnlineCoop.cfg you can set MaxHeight = 360 or MaxFps = 20.
 - Picture upside down for your friend: they press H and tick "Flip it".
-- No game sound for your friend: set StreamAudio = false if it causes any trouble for you.
+- No game sound for your friend: the F8 panel has a "Sound:" line saying where it comes from.
+  Set StreamAudio = false if the sound capture causes any trouble for you.
 - Game stutters for you while hosting: lower MaxFps in the config.
 Everything the mod does is logged in BepInEx/LogOutput.log.
 

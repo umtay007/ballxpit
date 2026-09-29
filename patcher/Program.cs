@@ -8,6 +8,8 @@
 //     which also reports keys a remote guest is holding (P2's Shoot key, for example).
 //   * UpdatePlayerTwoInput calls OnlineHooks.OnBeforeApplyInput(this) right before it applies P2's
 //     movement and aim, so the add-on can put the guest's stick and aim into P2's fields.
+//   * RequestNativePlayerTwoShot first asks OnlineHooks.CanPlayerTwoShoot() (hooks version 2), so the
+//     add-on can stop a knocked-out P2 from shooting.
 // The reference copy is the same assembly with every member made public, used only to compile the
 // add-on (which reaches the real private members at runtime through IgnoresAccessChecksTo).
 using Mono.Cecil;
@@ -22,7 +24,7 @@ if (args.Length != 3)
 
 const string HooksNamespace = "BALLxPITLocalCoop";
 const string HooksName = "OnlineHooks";
-const int HooksVersion = 1;
+const int HooksVersion = 2;
 
 try
 {
@@ -71,9 +73,13 @@ static void Patch(ModuleDefinition module)
         .FirstOrDefault() ?? throw new PatchException("PlayerTwoController never calls Input.GetKey(KeyCode).");
     TypeReference keyCode = inputGetKey.Parameters[0].ParameterType;
 
+    MethodDefinition requestShot = controller.Methods.SingleOrDefault(m => m.Name == "RequestNativePlayerTwoShot" && m.Parameters.Count == 1)
+        ?? throw new PatchException("PlayerTwoController.RequestNativePlayerTwoShot(string) not found.");
+
     TypeDefinition hooks = BuildHooksType(module, controller, inputGetKey, keyCode);
     MethodDefinition hookGetKey = hooks.Methods.Single(m => m.Name == "GetKey");
     MethodDefinition hookBeforeApply = hooks.Methods.Single(m => m.Name == "OnBeforeApplyInput");
+    MethodDefinition hookCanShoot = hooks.Methods.Single(m => m.Name == "CanPlayerTwoShoot");
 
     // 1. Route P2's key reads through the hook.
     int redirected = 0;
@@ -142,7 +148,20 @@ static void Patch(ModuleDefinition module)
     }
     body.OptimizeMacros();
 
-    // 3. Mark the plugin so logs and BepInEx's duplicate check can tell the builds apart. A higher
+    // 3. Let the add-on veto P2's shots:
+    //        if (!OnlineHooks.CanPlayerTwoShoot()) return;   at the top of RequestNativePlayerTwoShot
+    MethodBody shotBody = requestShot.Body;
+    shotBody.SimplifyMacros();
+    Instruction first = shotBody.Instructions[0];
+    if (shotBody.ExceptionHandlers.Any(h => h.TryStart == first || h.HandlerStart == first))
+        throw new PatchException("RequestNativePlayerTwoShot starts inside an exception handler; its layout changed.");
+    ILProcessor shotIl = shotBody.GetILProcessor();
+    shotIl.InsertBefore(first, shotIl.Create(OpCodes.Call, hookCanShoot));
+    shotIl.InsertBefore(first, shotIl.Create(OpCodes.Brtrue, first));
+    shotIl.InsertBefore(first, shotIl.Create(OpCodes.Ret));
+    shotBody.OptimizeMacros();
+
+    // 4. Mark the plugin so logs and BepInEx's duplicate check can tell the builds apart. A higher
     //    version makes BepInEx pick this copy if the original DLL is still installed.
     TypeDefinition plugin = module.GetType("BALLxPITLocalCoop.Plugin") ?? throw new PatchException("Plugin class not found.");
     CustomAttribute bepInPlugin = plugin.CustomAttributes.SingleOrDefault(a => a.AttributeType.FullName == "BepInEx.BepInPlugin")
@@ -155,6 +174,7 @@ static void Patch(ModuleDefinition module)
 
     Console.WriteLine($"Redirected {redirected} Input.GetKey reads in PlayerTwoController ({string.Join(", ", methodsWithRedirect.OrderBy(n => n))}).");
     Console.WriteLine($"Inserted OnBeforeApplyInput in UpdatePlayerTwoInput; retargeted {retargeted} branch(es).");
+    Console.WriteLine("Inserted CanPlayerTwoShoot at the top of RequestNativePlayerTwoShot.");
 }
 
 static bool IsInputGetKey(MethodReference r) =>
@@ -189,7 +209,16 @@ static TypeDefinition BuildHooksType(ModuleDefinition module, TypeDefinition con
     var actionInvoke = new MethodReference("Invoke", module.TypeSystem.Void, actionController) { HasThis = true };
     actionInvoke.Parameters.Add(new ParameterDefinition(actionOpen.GenericParameters[0]));
 
+    // Func<bool>
+    var func1Open = new TypeReference("System", "Func`1", module, systemRuntime);
+    func1Open.GenericParameters.Add(new GenericParameter("TResult", func1Open));
+    var funcBool = new GenericInstanceType(func1Open);
+    funcBool.GenericArguments.Add(module.TypeSystem.Boolean);
+    var funcBoolInvoke = new MethodReference("Invoke", func1Open.GenericParameters[0], funcBool) { HasThis = true };
+
     var remoteKeyHeld = new FieldDefinition("RemoteKeyHeld", FieldAttributes.Public | FieldAttributes.Static, funcKeyBool);
+    var allowShot = new FieldDefinition("AllowPlayerTwoShot", FieldAttributes.Public | FieldAttributes.Static, funcBool);
+    hooks.Fields.Add(allowShot);
     var beforeApplyInput = new FieldDefinition("BeforeApplyInput", FieldAttributes.Public | FieldAttributes.Static, actionController);
     hooks.Fields.Add(remoteKeyHeld);
     hooks.Fields.Add(beforeApplyInput);
@@ -252,6 +281,26 @@ static TypeDefinition BuildHooksType(ModuleDefinition module, TypeDefinition con
         il.Emit(OpCodes.Ret);
     }
     hooks.Methods.Add(onBeforeApply);
+
+    // public static bool CanPlayerTwoShoot()
+    // {
+    //     Func<bool> allow = AllowPlayerTwoShot;
+    //     return allow == null || allow();
+    // }
+    var canShoot = new MethodDefinition("CanPlayerTwoShoot", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, module.TypeSystem.Boolean);
+    {
+        ILProcessor il = canShoot.Body.GetILProcessor();
+        Instruction noCallback = il.Create(OpCodes.Pop);
+        il.Emit(OpCodes.Ldsfld, allowShot);
+        il.Emit(OpCodes.Dup);
+        il.Emit(OpCodes.Brfalse, noCallback);
+        il.Emit(OpCodes.Callvirt, funcBoolInvoke);
+        il.Emit(OpCodes.Ret);
+        il.Append(noCallback);
+        il.Emit(OpCodes.Ldc_I4_1);
+        il.Emit(OpCodes.Ret);
+    }
+    hooks.Methods.Add(canShoot);
 
     foreach (MethodDefinition method in hooks.Methods)
         method.Body.OptimizeMacros();

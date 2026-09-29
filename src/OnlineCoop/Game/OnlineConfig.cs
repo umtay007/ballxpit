@@ -21,6 +21,10 @@ internal static class OnlineConfig
     public static ConfigEntry<bool> AdaptiveQuality = null!;
     public static ConfigEntry<bool> StreamAudio = null!;
     public static ConfigEntry<int> EncoderThreads = null!;
+    public static ConfigEntry<bool> SeparateHealth = null!;
+    public static ConfigEntry<int> DownedSeconds = null!;
+    public static ConfigEntry<int> ReviveHealthPercent = null!;
+    public static ConfigEntry<bool> SharedHealing = null!;
 
     public static void Bind(ConfigFile config)
     {
@@ -50,6 +54,16 @@ internal static class OnlineConfig
         AdaptiveQuality = config.Bind("Stream", "AdaptiveQuality", true, "Lower the quality (and then the size) automatically while a guest's connection can't keep up.");
         StreamAudio = config.Bind("Stream", "StreamAudio", true, "Send the game's sound to guests.");
         EncoderThreads = config.Bind("Stream", "EncoderThreads", 0, "CPU threads for picture encoding. 0 = half your cores, up to 6.");
+
+        SeparateHealth = config.Bind("Co-op", "SeparateHealth", true,
+            "P2 has its own health instead of sharing yours. At zero P2 is knocked out for a while instead of ending the run. "
+            + "Works for online and local co-op.");
+        DownedSeconds = config.Bind("Co-op", "DownedSeconds", 20,
+            new ConfigDescription("How long a knocked-out P2 stays down.", new AcceptableValueRange<int>(1, 600)));
+        ReviveHealthPercent = config.Bind("Co-op", "ReviveHealthPercent", 50,
+            new ConfigDescription("Health P2 gets back up with, in percent of max health.", new AcceptableValueRange<int>(1, 100)));
+        SharedHealing = config.Bind("Co-op", "SharedHealing", true,
+            "When you heal, P2 heals by the same amount (hearts may only be collectable by you).");
     }
 
     public static OnlineHostOptions ToOptions() => new()

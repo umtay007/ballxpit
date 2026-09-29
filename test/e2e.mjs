@@ -81,6 +81,12 @@ try {
   const fps = parseInt(stats.split('·')[1], 10);
   check(fps >= 15, `stream runs at a playable rate: "${stats}"`);
 
+  // ---- P2 health from the host's status ----
+  await page.waitForFunction(() => !document.getElementById('hp').hidden, null, { timeout: 5000 });
+  const hpText = await page.textContent('#hp');
+  check(/75\/100/.test(hpText), `P2 health shows on the page ("${hpText}")`);
+  check(await page.locator('#downed').isHidden(), 'no knocked-out overlay while P2 is up');
+
   // ---- keyboard movement ----
   let mark = since();
   await page.keyboard.down('d');
