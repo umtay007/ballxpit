@@ -1,5 +1,5 @@
-BALLxPIT Online Co-op 0.1.9
-===========================
+BALLxPIT Online Co-op 0.1.10
+============================
 Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
 and controls Player 2 with keyboard and mouse or a controller.
@@ -116,8 +116,9 @@ versions don't work with this one: record again.
 1. F8 > "Playing on two PCs" > "1. Record a test run". Start a new run (any character, any
    level) from the menu, or restart the one you're in, and wait. It saves
    BepInEx\sync-test-recording.json.
-2. "2. Check against the recording", then start or restart the SAME character and level. The
-   panel says IN SYNC, or OUT OF SYNC with the moment and what differed.
+2. "2. Check against the recording", then start a NEW run with the SAME character and level
+   (from the menu, or Restart in the pause menu; carrying on with the run you're in doesn't
+   count). The panel says IN SYNC, or OUT OF SYNC with the moment and what differed.
 3. Your friend installs the same version, puts your sync-test-recording.json in their BepInEx
    folder and does step 2 on their PC.
 Send me BepInEx\sync-test-result.txt from each check (and your friend's), whatever it says. If

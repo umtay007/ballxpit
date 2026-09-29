@@ -383,7 +383,7 @@ internal static class PlayerTwoLoadout
             int requestedOffer = Interlocked.Exchange(ref _requestedOffer, -1);
             if (requestedOffer >= 0 && requestedOffer == _offerId) _queuedChoice = Volatile.Read(ref _requestedIndex);
 
-            if (_queuedChoice >= 0 && !IsLevelUpScreenOpen())
+            if (_queuedChoice >= 0 && !IsLevelUpScreenOpen() && InFight())
             {
                 int index = _queuedChoice;
                 _queuedChoice = -1;
@@ -550,6 +550,12 @@ internal static class PlayerTwoLoadout
         _jsonDirty = true;
     }
 
+    private static bool InFight()
+    {
+        GameMgr game = GameMgr.I;
+        return game == null || game.CurState == GameState.kPlaying;
+    }
+
     private static bool IsLevelUpScreenOpen()
     {
         LevelUpUI ui = LevelUpUI.I;
@@ -572,8 +578,9 @@ internal static class PlayerTwoLoadout
         while (Picks.Count > 0)
         {
             PickKind kind = Picks.Peek();
-            // P2's fuser options are worked out with the game's level-up screen, so after the host's closes.
-            if (kind == PickKind.Fuser && IsLevelUpScreenOpen()) return;
+            // P2's fuser options are worked out with the game's level-up screen, so after the host's
+            // fuser (a treasure pick, then that screen) is done and the fight is on again.
+            if (kind == PickKind.Fuser && (IsLevelUpScreenOpen() || !InFight())) return;
             List<LoadoutChoice> choices = kind == PickKind.Fuser ? BuildFuserChoices(p2) : BuildChoices(kind);
             if (choices.Count > 0)
             {
@@ -882,8 +889,8 @@ internal static class PlayerTwoLoadout
         if (Picks.Count > 0) Picks.Dequeue();
         _offer = null;
         _jsonDirty = true;
-        Plugin.Logger.LogInfo($"P2 picked {choice.Label}.");
         if (choice.Fuser == FuserOption.None) SetNews($"P2 picked {choice.Label}.");
+        else Plugin.Logger.LogInfo($"P2 picked {choice.Label}.");
     }
 
     private static void SetNews(string text)

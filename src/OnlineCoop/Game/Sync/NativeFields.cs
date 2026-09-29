@@ -59,7 +59,9 @@ internal static unsafe class NativeFields
                 IntPtr arrayClass = IL2CPP.il2cpp_object_get_class(array);
                 IntPtr elementClass = IL2CPP.il2cpp_class_get_element_class(arrayClass);
                 if (elementClass == IntPtr.Zero || !IL2CPP.il2cpp_class_is_valuetype(elementClass)) continue;
-                int elementSize = IL2CPP.il2cpp_class_array_element_size(arrayClass);
+                // The size of one element when stored in an array, asked of the element's class (asked of
+                // the array's class it says 8, the size of a reference, and reads past the end).
+                int elementSize = IL2CPP.il2cpp_class_array_element_size(elementClass);
                 long bytes = (long)IL2CPP.il2cpp_array_length(array) * elementSize;
                 Mix(ref hash, (byte*)array + 4 * IntPtr.Size, (int)Math.Min(bytes, 4096));
             }

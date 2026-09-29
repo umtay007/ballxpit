@@ -13,6 +13,13 @@ namespace Il2CppSystem
         public Type(IntPtr pointer) : base(pointer) { }
     }
 
+    // A static class in the runtime; Il2CppInterop wraps it as a sealed class.
+    public sealed class Environment : Object
+    {
+        public Environment(IntPtr pointer) : base(pointer) { }
+        public static string StackTrace => throw null;
+    }
+
     public class Random : Object
     {
         public Random(IntPtr pointer) : base(pointer) { }

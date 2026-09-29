@@ -35,13 +35,16 @@ internal enum SyncTestMode { Record, Check }
 internal static class SyncTest
 {
     public const int TestSeed = 20260929;
+    /// <summary>The fingerprint of a generator just made with <see cref="TestSeed"/>, worked out outside the game.</summary>
+    private const uint TestSeedFingerprint = 3695218007;
     /// <summary>
-    /// 4: the game clock is set when the run starts and saved; the game thread's own generator is
+    /// 5: generator fingerprints read exactly the seed table (4 read past its end, so identical
+    /// generators could differ). 4: the game clock is set when the run starts and saved; the game thread's own generator is
     /// fingerprinted; structs and enums inside generators count. 3: frame 0 is when the fight starts
     /// with P2 released from its walk-in and the extra random number generators reseeded.
     /// 2: generators fingerprinted by their whole state. 1 read nothing.
     /// </summary>
-    private const int RecordingFormat = 4;
+    private const int RecordingFormat = 5;
     /// <summary>The game clock a run starts from is at least this (seconds), and a power of two above what it was.</summary>
     private const float MinGameClock = 1024f;
     public const int TestFrames = 60 * FixedFrameClock.FramesPerSecond;
@@ -80,6 +83,13 @@ internal static class SyncTest
     private static int _mainThreadId;
     private static long _drawsMain, _drawsOther;
     private static readonly ConcurrentDictionary<int, byte> OtherThreads = new();
+    // A few draws, with the thread's name and the game code that asked, to see what uses other threads.
+    private const int MaxDrawSamples = 24;
+    private static int _drawSamples;
+    private static int _drawGeneration;
+    [ThreadStatic] private static int t_drawGeneration;
+    [ThreadStatic] private static int t_draws;
+    private static readonly ConcurrentQueue<string> DrawSamples = new();
 
     /// <summary>Things the test found out along the way, for the result file.</summary>
     private static readonly List<string> Details = new();
@@ -145,13 +155,16 @@ internal static class SyncTest
         Interlocked.Exchange(ref _drawsMain, 0);
         Interlocked.Exchange(ref _drawsOther, 0);
         OtherThreads.Clear();
+        Interlocked.Exchange(ref _drawSamples, 0);
+        Interlocked.Increment(ref _drawGeneration);
+        DrawSamples.Clear();
         Details.Clear();
         CheckFingerprints();
         _saveWhenArmed = BattleSaveData.I?.Pointer ?? IntPtr.Zero;
         _phase = Phase.WaitingForRun;
         _status = mode == SyncTestMode.Record
-            ? "Start a new run (any character and level) or restart one. Then don't touch anything for a minute."
-            : $"Start or restart a run with {_reference!.Describe()}. Then don't touch anything for a minute.";
+            ? "Waiting: start a NEW run from the menu (any character and level) or Restart from the pause menu. Continuing the current run doesn't count."
+            : $"Waiting: start a NEW run with {_reference!.Describe()}, from the menu or with Restart in the pause menu. Continuing the current run doesn't count.";
         Plugin.Logger.LogInfo($"Sync test ({mode}) armed.");
     }
 
@@ -211,7 +224,8 @@ internal static class SyncTest
     {
         if (_phase != Phase.Running) return;
         int thread = Environment.CurrentManagedThreadId;
-        if (thread == _mainThreadId)
+        bool main = thread == _mainThreadId;
+        if (main)
         {
             Interlocked.Increment(ref _drawsMain);
         }
@@ -219,6 +233,73 @@ internal static class SyncTest
         {
             Interlocked.Increment(ref _drawsOther);
             OtherThreads.TryAdd(thread, 0);
+        }
+        int generation = Volatile.Read(ref _drawGeneration);
+        if (t_drawGeneration != generation)
+        {
+            t_drawGeneration = generation;
+            t_draws = 0;
+        }
+        int n = ++t_draws;
+        if ((n == 1 || n == 50 || n == 500) && Interlocked.Increment(ref _drawSamples) <= MaxDrawSamples)
+        {
+            // Runs inside the game's random number calls: nothing may escape from here.
+            try
+            {
+                SampleDraw(main, thread, n);
+            }
+            catch
+            {
+                // no sample, then
+            }
+        }
+    }
+
+    private static void SampleDraw(bool main, int thread, int n)
+    {
+        string stack;
+        try
+        {
+            stack = GameStackTrace();
+        }
+        catch (Exception ex)
+        {
+            stack = "(no stack: " + ex.Message + ")";
+        }
+        IEnumerable<string> frames = stack.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0)
+            .Where(l => !l.Contains("Environment", StringComparison.Ordinal) && !l.Contains("StackTrace", StringComparison.Ordinal))
+            .Select(l => l.StartsWith("at ", StringComparison.Ordinal) ? l.Substring(3) : l)
+            .Select(l => { int cut = l.IndexOf(" [0x", StringComparison.Ordinal); return cut > 0 ? l.Substring(0, cut) : l; })
+            .Take(10);
+        DrawSamples.Enqueue($"{(main ? "game thread" : "other thread")} {thread} \"{ThreadName()}\", draw {n}: {string.Join(" <- ", frames)}");
+    }
+
+    /// <summary>Separate, so a runtime without Environment.StackTrace fails here, where it's caught.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static string GameStackTrace() => Il2CppSystem.Environment.StackTrace ?? "";
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentThread();
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern int GetThreadDescription(IntPtr thread, out IntPtr description);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
+    /// <summary>The thread's name as Windows knows it (Unity names its worker threads).</summary>
+    private static string ThreadName()
+    {
+        try
+        {
+            if (GetThreadDescription(GetCurrentThread(), out IntPtr text) < 0 || text == IntPtr.Zero) return "?";
+            string name = System.Runtime.InteropServices.Marshal.PtrToStringUni(text) ?? "";
+            LocalFree(text);
+            return name.Length == 0 ? "unnamed" : name;
+        }
+        catch
+        {
+            return "?";
         }
     }
 
@@ -240,8 +321,10 @@ internal static class SyncTest
             var b = new Il2CppSystem.Random(TestSeed);
             uint ha = NativeFields.RandomState(a.Pointer), hb = NativeFields.RandomState(b.Pointer);
             IntPtr klass = Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(a.Pointer);
-            Detail($"fingerprint check: two generators with the same seed give {(ha == hb ? "the same fingerprint (good)" : $"DIFFERENT fingerprints ({ha} / {hb})")}. "
-                + NativeFields.DescribeClass(klass));
+            string verdict = ha != hb ? $"DIFFERENT fingerprints for the same seed ({ha} / {hb})"
+                : ha == TestSeedFingerprint ? "the same fingerprint for the same seed, the one worked out outside the game (good)"
+                : $"the same fingerprint for the same seed ({ha}), but not the one worked out outside the game ({TestSeedFingerprint})";
+            Detail($"fingerprint check: {verdict}. " + NativeFields.DescribeClass(klass));
             IntPtr threadSafe = Il2CppInterop.Runtime.Il2CppClassPointerStore<ThreadSafeRandom>.NativeClassPtr;
             if (threadSafe != IntPtr.Zero)
                 Detail("ThreadSafeRandom " + NativeFields.DescribeStaticField(threadSafe, "_global") + ", " + NativeFields.DescribeStaticField(threadSafe, "_local"));
@@ -712,7 +795,7 @@ internal static class SyncTest
                 new Recording(_setup, Frames, _startFrames, reason, _seedForced, _stabilized, _clockFixed, _gameClock).Save(RecordingPath);
                 _status = $"Recorded {Seconds(Frames.Count)} s (stopped because {reason}).{caveat}";
                 ReportLines.Add(_status);
-                ReportLines.Add("Next: click \"Check\" and start the same character and level again, hands off.");
+                ReportLines.Add("Next: click \"Check\", then start a NEW run with the same character and level (or Restart from the pause menu), hands off.");
                 ReportLines.Add("For your friend's PC: send them BepInEx\\sync-test-recording.json to put in their BepInEx folder.");
             }
             catch (Exception ex)
@@ -745,8 +828,9 @@ internal static class SyncTest
         if (ReportLines.Count == 0) ReportLines.Add(_status);
         long main = Interlocked.Read(ref _drawsMain), other = Interlocked.Read(ref _drawsOther);
         Detail(other > 0
-            ? $"ThreadSafeRandom handed out {main} numbers on the game thread and {other} on {OtherThreads.Count} other thread(s): those can't be kept in step."
+            ? $"ThreadSafeRandom handed out {main} numbers on the game thread and {other} on {OtherThreads.Count} other thread(s)."
             : $"ThreadSafeRandom handed out {main} numbers, all on the game thread.");
+        while (DrawSamples.TryDequeue(out string? sample)) Detail("random number drawn on the " + sample);
         WriteResult(reason);
         Plugin.Logger.LogInfo("Sync test finished: " + string.Join(" | ", ReportLines));
     }
@@ -792,9 +876,18 @@ internal static class SyncTest
     public static void DrawBanner()
     {
         if (!IsActive) return;
-        float width = Math.Min(760f, Screen.width - 20f);
-        if (GUI.Button(new Rect((Screen.width - width) / 2f, 50f, width, 30f), "SYNC TEST: " + _status + "   (click to stop)"))
-            Stop();
+        float width = Math.Min(900f, Screen.width - 20f);
+        // Two lines when it's long: the first sentence, then the rest.
+        string first = _status, rest = "";
+        int cut = _status.IndexOf(": ", StringComparison.Ordinal);
+        if (_status.Length > 90 && cut > 0 && cut < 60)
+        {
+            first = _status.Substring(0, cut);
+            rest = _status.Substring(cut + 2);
+        }
+        float x = (Screen.width - width) / 2f;
+        if (GUI.Button(new Rect(x, 50f, width, 30f), "SYNC TEST: " + first + "   (click to stop)")) Stop();
+        if (rest.Length > 0 && GUI.Button(new Rect(x, 82f, width, 30f), rest)) Stop();
     }
 
     // ---- The recording file ------------------------------------------------------------------------
