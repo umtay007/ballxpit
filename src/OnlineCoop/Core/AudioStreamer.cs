@@ -39,6 +39,8 @@ public sealed class AudioStreamer : IDisposable
     }
 
     public bool Enabled { get; set; } = true;
+    /// <summary>Asked before each packet: true sends half the sample rate (half the bytes) for slow connections.</summary>
+    public Func<bool>? HalfRate { get; set; }
     public long SamplesPushed => Interlocked.Read(ref _written) / 2;
     public int SampleRate => _sampleRate;
 
@@ -87,7 +89,21 @@ public sealed class AudioStreamer : IDisposable
                 _read += framesPerPacket * 2;
                 try
                 {
-                    _server.SendAudio(Encode(stereo, framesPerPacket, rate));
+                    if (HalfRate?.Invoke() == true)
+                    {
+                        // Every two frames averaged into one: a simple low-pass before halving the rate.
+                        int half = framesPerPacket / 2;
+                        for (int f = 0; f < half; f++)
+                        {
+                            stereo[f * 2] = (stereo[f * 4] + stereo[f * 4 + 2]) * 0.5f;
+                            stereo[f * 2 + 1] = (stereo[f * 4 + 1] + stereo[f * 4 + 3]) * 0.5f;
+                        }
+                        _server.SendAudio(Encode(stereo, half, rate / 2));
+                    }
+                    else
+                    {
+                        _server.SendAudio(Encode(stereo, framesPerPacket, rate));
+                    }
                 }
                 catch (Exception ex)
                 {

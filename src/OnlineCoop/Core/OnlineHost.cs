@@ -17,6 +17,10 @@ public sealed class OnlineHostOptions
     public int MaxHeight = 540;
     public int Quality = 60;
     public bool AdaptiveQuality = true;
+    /// <summary>Stream H.264 to browsers that can decode it (Cisco's OpenH264, downloaded into <see cref="ToolDirectory"/>).</summary>
+    public bool UseH264 = true;
+    public bool AllowH264Download = true;
+    public int MaxBitrateKbps = 6000;
     public bool StreamAudio = true;
     /// <summary>0 = pick from the CPU count.</summary>
     public int EncoderThreads;
@@ -55,6 +59,7 @@ public sealed class OnlineHost : IDisposable
     public string TunnelStatus => _options.UseCloudflareTunnel ? _tunnel?.Status ?? "" : "Off in the config";
     public string UpnpStatus => _options.UseUpnp ? _upnp?.Status ?? "" : "Off in the config";
     public bool TunnelReady => _tunnel?.IsReady == true && _tunnel.PublicUrl != null;
+    public string VideoCodecStatus => !_options.UseH264 ? "H.264 off in the config" : OpenH264Library.Status;
     public bool DirectLinkReady => _upnp?.Mapped == true && _upnp.ExternalAddress != null;
 
     public bool Start()
@@ -98,11 +103,23 @@ public sealed class OnlineHost : IDisposable
             MaxHeight = Math.Clamp(_options.MaxHeight, 180, 2160),
             Quality = Math.Clamp(_options.Quality, 10, 95),
             AdaptiveQuality = _options.AdaptiveQuality,
+            MaxBitrate = Math.Clamp(_options.MaxBitrateKbps, 300, 50_000) * 1000,
         };
-        Audio = new AudioStreamer(server) { Enabled = _options.StreamAudio };
+        Video.StartBitrate = Math.Min(Video.MaxBitrate, 2_000_000);
+        VideoStreamer video = Video;
+        Audio = new AudioStreamer(server) { Enabled = _options.StreamAudio, HalfRate = () => video.LowBandwidth };
         _cts = new CancellationTokenSource();
         _lanAddress = NetworkInfo.LanAddress();
 
+        if (_options.UseH264)
+        {
+            CancellationToken token = _cts.Token;
+            _ = Task.Run(async () =>
+            {
+                if (await OpenH264Library.EnsureLoadedAsync(_options.ToolDirectory, _options.AllowH264Download, token).ConfigureAwait(false))
+                    server.H264Available = true;
+            });
+        }
         if (_options.UseCloudflareTunnel)
         {
             _tunnel = new CloudflareTunnel(_options.ToolDirectory, _options.AllowCloudflaredDownload);

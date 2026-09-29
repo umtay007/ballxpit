@@ -1,4 +1,4 @@
-BALLxPIT Online Co-op 0.1.4
+BALLxPIT Online Co-op 0.1.5
 ===========================
 Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
@@ -45,7 +45,8 @@ HOST A GAME
 2. Wait a few seconds for a line like
        Internet link: https://some-random-words.trycloudflare.com/#K7QM2P  (click to copy)
    The first time, the mod downloads cloudflared.exe (Cloudflare's free tunnel program, about
-   40 MB) into BepInEx/plugins/BALLxPITOnlineCoop. Click the line to copy the link.
+   40 MB) and Cisco's OpenH264 video encoder (0.5 MB) into BepInEx/plugins/BALLxPITOnlineCoop.
+   Click the line to copy the link.
 3. Send the link to your friend (Discord, text, anything). They open it in Chrome, Edge or
    Firefox, type a name and click "Join as Player 2". The code after # is the password, so only
    people you send the link to can get in.
@@ -54,7 +55,8 @@ HOST A GAME
 
 Other links the panel can show:
   Direct link       http://your-ip:47777/...  Offered when your router accepts UPnP. A little less
-                    lag than the internet link. Controllers may only work on the https link.
+                    lag than the internet link, but browsers only allow H.264 video and
+                    controllers on https links, so this one sends the bigger JPEG pictures.
   Same Wi-Fi link   For someone in your house.
 Windows may ask whether BALLxPIT may accept connections: allow it for the direct and Wi-Fi links.
 The internet link works either way.
@@ -114,8 +116,14 @@ IF SOMETHING'S OFF
   or use the direct link.
 - The panel says your Local Coop DLL is the original: the old BALLxPITLocalCoop.dll is still being
   loaded. Delete it and keep the one from this zip.
-- Choppy or blurry picture: your upload is the limit. The mod already lowers quality by itself. In
-  BepInEx/config/BALLxPITOnlineCoop.cfg you can set MaxHeight = 360 or MaxFps = 20.
+- Choppy or blurry picture: look at the "Picture" line in the F8 panel.
+    "H.264 ... Mbit/s" is the good case: the mod finds the fastest rate the connection holds by
+      itself (up to MaxBitrateKbps in the config, 6000 by default).
+    "JPEG" means your friend's browser didn't take H.264: use the internet (https) link in Chrome,
+      Edge or Firefox. The brackets say why if the encoder itself is missing.
+  Your upload speed is the limit either way. On slow connections the mod also sends the sound at
+  half quality. BepInEx/LogOutput.log gets a "Stream:" line every 20 seconds; send it if the
+  picture stays bad.
 - Picture upside down for your friend: they press H and tick "Flip it".
 - No game sound for your friend: the F8 panel has a "Sound:" line saying where it comes from.
   Set StreamAudio = false if the sound capture causes any trouble for you.
@@ -127,5 +135,8 @@ Everything the mod does is logged in BepInEx/LogOutput.log.
 Settings live in BepInEx/config/BALLxPITOnlineCoop.cfg (created on first start).
 
 BepInEx (https://github.com/BepInEx/BepInEx) is LGPL-2.1; its license is in BepInEx\LICENSE-BepInEx.txt.
+OpenH264 Video Codec provided by Cisco Systems, Inc. The mod downloads Cisco's binary from Cisco
+(ciscobinary.openh264.org) and checks it before use; its license is at
+https://www.openh264.org/BINARY_LICENSE.txt. Turn it off with H264 = false in the config.
 Local Coop is by sparrow (https://www.nexusmods.com/ballxpit/mods/24). The BALLxPITLocalCoop.dll
 in this zip is their mod with online hooks added, for personal use; ask them before sharing it.

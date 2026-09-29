@@ -33,6 +33,14 @@ controller. Players install it with [docs/INSTALL.txt](docs/INSTALL.txt).
   doesn't cap the frame rate, and fewer as soon as frames start queueing on a slow link, so lag
   stays low. When the connection is what holds the frame rate down, JPEG quality drops and then
   the picture shrinks another step; both climb back when there's room.
+- **H.264.** Browsers that can decode H.264 with WebCodecs (Chrome, Edge, Firefox, Safari; https
+  or localhost pages only) get an H.264 stream instead of JPEG pictures, several times smaller for
+  the same picture. The encoder is Cisco's OpenH264 (constrained baseline, rate-controlled),
+  downloaded from Cisco at first use and checked against a SHA-256 (the `.bz2` is unpacked by a
+  small built-in bzip2 decoder), called through its C++ function table. A guest that misses a frame
+  waits for the next keyframe; keyframes are sent on join, on request and when the picture size
+  changes. The bitrate drops by 30% while frames queue and climbs while the stream uses what it
+  has. On slow links the sound goes to half rate. "OpenH264 Video Codec provided by Cisco Systems, Inc."
 - **Audio.** BALL x PIT plays sound through FMOD, so a pass-through DSP is added at the head of
   FMOD's master bus (straight through `fmod.dll`'s exports, with the handle from
   `FMODUnity.RuntimeManager.CoreSystem`); it copies the final mix and sends 20 ms IMA ADPCM packets

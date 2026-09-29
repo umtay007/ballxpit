@@ -220,6 +220,7 @@
   let lastRtt = 0;
   let bytesIn = 0;
   let framesDrawn = 0;
+  let lastVideoKind = 0;
 
   function setConn(text, state) {
     $('connText').textContent = text;
@@ -236,13 +237,18 @@
     sock.onopen = () => {
       opened = true;
       retryDelay = 1000;
-      send({ t: 'hello', code, name: myName, want: wantRole, id: clientId });
+      h264.reset();
+      h264Support.then((ok) => {
+        if (ws === sock) send({ t: 'hello', code, name: myName, want: wantRole, id: clientId, codecs: ok ? ['h264'] : [] });
+      });
     };
     sock.onmessage = (ev) => {
       if (typeof ev.data === 'string') { onControl(JSON.parse(ev.data)); return; }
       bytesIn += ev.data.byteLength;
       const kind = new Uint8Array(ev.data, 0, 1)[0];
+      if (kind === 1 || kind === 3) lastVideoKind = kind;
       if (kind === 1) onVideo(ev.data);
+      else if (kind === 3) h264.onPacket(ev.data);
       else if (kind === 2) audio.onPacket(ev.data);
     };
     sock.onclose = () => {
@@ -466,6 +472,92 @@
     if (pendingFrame) drawNext();
   }
 
+  // ---------- H.264 (WebCodecs) ----------
+  // Chrome, Edge, Firefox and Safari decode H.264 with WebCodecs, on secure pages (the https link,
+  // localhost). Elsewhere, or if it fails, the host sends JPEG pictures instead.
+  const h264Support = (async () => {
+    try {
+      if (!window.isSecureContext || typeof VideoDecoder === 'undefined') return false;
+      const r = await VideoDecoder.isConfigSupported({ codec: 'avc1.42E01F', optimizeForLatency: true });
+      return !!r.supported;
+    } catch { return false; }
+  })();
+
+  const h264 = (() => {
+    let dec = null, codec = '', size = '', needKey = true, errors = 0, disabled = false;
+    const hex = (b) => b.toString(16).padStart(2, '0');
+    // "avc1.PPCCLL" from the sequence parameter set (NAL type 7) in an Annex-B keyframe.
+    function codecOf(data) {
+      for (let i = 0; i + 7 < data.length; i++) {
+        if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1 && (data[i + 3] & 31) === 7)
+          return 'avc1.' + hex(data[i + 4]) + hex(data[i + 5]) + hex(data[i + 6]);
+      }
+      return '';
+    }
+    function create(c, w, h) {
+      try { if (dec && dec.state !== 'closed') dec.close(); } catch {}
+      dec = new VideoDecoder({
+        output: (frame) => {
+          const id = frame.timestamp;
+          if (frame.displayWidth !== frameW || frame.displayHeight !== frameH) {
+            frameW = frame.displayWidth; frameH = frame.displayHeight;
+            canvas.width = frameW; canvas.height = frameH;
+            layout();
+          }
+          ctx2d.drawImage(frame, 0, 0, frameW, frameH);
+          frame.close();
+          framesDrawn++;
+          errors = 0;
+          $('waiting').hidden = true;
+          send({ t: 'ack', f: id });
+        },
+        error: () => fail(),
+      });
+      dec.configure({ codec: c, codedWidth: w, codedHeight: h, optimizeForLatency: true });
+      codec = c;
+      size = w + 'x' + h;
+    }
+    function fail() {
+      needKey = true;
+      dec = null;
+      if (++errors >= 3) {
+        // This browser claims H.264 but can't do it: ask for JPEG pictures.
+        disabled = true;
+        send({ t: 'noh264' });
+      } else {
+        send({ t: 'key' });
+      }
+    }
+    return {
+      reset() { try { if (dec && dec.state !== 'closed') dec.close(); } catch {} dec = null; needKey = true; },
+      onPacket(buf) {
+        const v = new DataView(buf);
+        const id = v.getUint32(1, true), w = v.getUint16(5, true), h = v.getUint16(7, true);
+        const key = (v.getUint8(9) & 1) === 1;
+        const data = new Uint8Array(buf, 10);
+        if (disabled) { send({ t: 'ack', f: id }); return; }
+        if (key) {
+          const c = codecOf(data) || codec;
+          try {
+            if (!dec || dec.state === 'closed' || c !== codec || size !== w + 'x' + h) create(c, w, h);
+            needKey = false;
+          } catch { fail(); }
+        }
+        if (needKey || !dec) {
+          // Can't show this without the keyframe before it; let the host know it arrived.
+          send({ t: 'ack', f: id });
+          return;
+        }
+        try {
+          dec.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: id, data }));
+        } catch {
+          send({ t: 'ack', f: id });
+          fail();
+        }
+      },
+    };
+  })();
+
   function loadImage(blob) {
     return new Promise((resolve, reject) => {
       const url = URL.createObjectURL(blob);
@@ -501,7 +593,7 @@
     const fps = framesDrawn - lastFrames, mbit = (bytesIn - lastBytes) * 8 / 1e6;
     lastFrames = framesDrawn; lastBytes = bytesIn;
     st.hidden = false;
-    st.textContent = `${lastRtt} ms · ${fps} fps · ${mbit.toFixed(1)} Mbit/s`;
+    st.textContent = `${lastRtt} ms · ${fps} fps · ${mbit.toFixed(1)} Mbit/s · ${lastVideoKind === 3 ? 'H.264' : 'JPEG'}`;
   }, 1000);
 
   // ---------- audio (IMA ADPCM, 20 ms packets) ----------

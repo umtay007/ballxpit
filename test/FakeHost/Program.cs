@@ -14,9 +14,11 @@ var host = new OnlineHost(new OnlineHostOptions
     Port = port,
     UseCloudflareTunnel = tunnelDir != null,
     AllowCloudflaredDownload = false,
-    ToolDirectory = tunnelDir ?? ".",
+    ToolDirectory = tunnelDir ?? AppContext.BaseDirectory,
     UseUpnp = false,
     HostName = "FakeHost",
+    // H.264 needs Cisco's library, downloaded once next to FakeHost.dll; FAKEHOST_H264=0 turns it off.
+    UseH264 = Environment.GetEnvironmentVariable("FAKEHOST_H264") != "0",
 }, page);
 if (!host.Start()) return 1;
 HostServer server = host.Server!;
@@ -24,11 +26,13 @@ Console.WriteLine($"CODE {server.JoinCode}");
 Console.WriteLine($"PORT {server.Port}");
 Console.Out.Flush();
 
-// FAKEHOST_SIZE=2560x1080 mimics an ultrawide host; FAKEHOST_DETAIL=1 adds texture so frames are
-// about as big as real game frames.
+// FAKEHOST_SIZE=2560x1080 mimics an ultrawide host. FAKEHOST_DETAIL=1 adds texture that changes
+// completely every frame (the worst case for any encoder); FAKEHOST_DETAIL=2 is more like a game: a
+// detailed background that stays put, with 60 things moving over it.
 string[] size = (Environment.GetEnvironmentVariable("FAKEHOST_SIZE") ?? "1920x1080").Split('x');
 int W = int.Parse(size[0], CultureInfo.InvariantCulture), H = int.Parse(size[1], CultureInfo.InvariantCulture);
-bool detail = Environment.GetEnvironmentVariable("FAKEHOST_DETAIL") == "1";
+bool detail = Environment.GetEnvironmentVariable("FAKEHOST_DETAIL") is "1" or "2";
+bool gameLike = Environment.GetEnvironmentVariable("FAKEHOST_DETAIL") == "2";
 var audioThread = new Thread(() =>
 {
     // 440 Hz left, 660 Hz right, pushed in 10 ms blocks like Unity's mixer would.
@@ -139,8 +143,18 @@ while ((DateTime.UtcNow - started).TotalSeconds < runFor)
         byte[] px = host.Video.GetCaptureBuffer(W, H);
         // Cycle through a few pre-drawn frames (drawing 2560x1080 in C# every frame would make this
         // harness, not the stream, the bottleneck), then stamp P2's box on top.
-        byte[] background = backgrounds[frame % backgrounds.Length];
+        byte[] background = backgrounds[gameLike ? 0 : frame % backgrounds.Length];
         Buffer.BlockCopy(background, 0, px, 0, background.Length);
+        if (gameLike)
+        {
+            for (int k = 0; k < 60; k++)
+            {
+                double t = frame / 30.0 + k * 1.7;
+                int sx = (int)((Math.Sin(t * (0.5 + k % 5 * 0.2)) * 0.45 + 0.5) * (W - 40));
+                int sy = (int)((Math.Cos(t * (0.3 + k % 7 * 0.15)) * 0.45 + 0.5) * (H - 40));
+                FillRect(px, W, H, sx, sy, 24 + k % 3 * 8, (byte)(k * 37), (byte)(255 - k * 11), (byte)(k * 91));
+            }
+        }
         DrawBox(px, W, H, (int)boxX, (int)boxY);
         host.Video.Submit(W, H, bottomUp: true, now);
     }
@@ -151,7 +165,7 @@ while ((DateTime.UtcNow - started).TotalSeconds < runFor)
         if (tunnelDir != null) Console.WriteLine($"TUNNEL {host.TunnelStatus}");
         foreach (GuestInfo g in server.GetGuests())
             Console.WriteLine(FormattableString.Invariant($"GUEST {g.Name} player={g.IsPlayer} ping={g.PingMs} kbps={g.KbitPerSecond:0} window={g.Window} congested={g.Congested} {g.Diagnostics}"));
-        Console.WriteLine(FormattableString.Invariant($"VIDEO fps={host.Video.FramesPerSecond} encode={host.Video.LastEncodeMs:0.0}ms quality={host.Video.CurrentQuality} bytes={host.Video.LastFrameBytes} size={host.Video.OutputWidth}x{host.Video.OutputHeight}"));
+        Console.WriteLine(FormattableString.Invariant($"VIDEO fps={host.Video.FramesPerSecond} encode={host.Video.LastEncodeMs:0.0}ms quality={host.Video.CurrentQuality} bytes={host.Video.LastFrameBytes} size={host.Video.OutputWidth}x{host.Video.OutputHeight} codec={host.Video.LastCodec} kbps={host.Video.CurrentBitrate / 1000} h264={server.H264Available}"));
     }
     Console.Out.Flush();
     Thread.Sleep(16);
@@ -183,6 +197,19 @@ static void Draw(byte[] px, int W, int H, bool detail, int frame, int boxX, int 
             }
             if (x >= boxX && x < boxX + 100 && top >= boxY && top < boxY + 100) { r = 255; g = 255; b = 255; }
             px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255;
+        }
+    }
+}
+
+static void FillRect(byte[] px, int W, int H, int left, int top, int size, byte r, byte g, byte b)
+{
+    for (int y = Math.Max(0, top); y < Math.Min(H, top + size); y++)
+    {
+        int row = (H - 1 - y) * W * 4;
+        for (int x = Math.Max(0, left); x < Math.Min(W, left + size); x++)
+        {
+            int i = row + x * 4;
+            px[i] = r; px[i + 1] = g; px[i + 2] = b;
         }
     }
 }

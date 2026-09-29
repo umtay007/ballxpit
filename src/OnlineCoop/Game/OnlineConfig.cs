@@ -20,6 +20,8 @@ internal static class OnlineConfig
     public static ConfigEntry<int> Quality = null!;
     public static ConfigEntry<bool> AdaptiveQuality = null!;
     public static ConfigEntry<bool> StreamAudio = null!;
+    public static ConfigEntry<bool> H264 = null!;
+    public static ConfigEntry<int> MaxBitrateKbps = null!;
     public static ConfigEntry<int> EncoderThreads = null!;
     public static ConfigEntry<bool> SeparateHealth = null!;
     public static ConfigEntry<int> DownedSeconds = null!;
@@ -51,7 +53,13 @@ internal static class OnlineConfig
         MaxHeight = config.Bind("Stream", "MaxHeight", 540,
             new ConfigDescription("Pictures taller than this are shrunk by a whole-number factor (1080 lines become 540). "
                 + "It shrinks further by itself while a guest's connection can't keep up.", new AcceptableValueRange<int>(180, 2160)));
-        Quality = config.Bind("Stream", "Quality", 60, new ConfigDescription("JPEG quality of the picture.", new AcceptableValueRange<int>(10, 95)));
+        Quality = config.Bind("Stream", "Quality", 60, new ConfigDescription("JPEG quality of the picture (for browsers that can't take H.264).", new AcceptableValueRange<int>(10, 95)));
+        H264 = config.Bind("Stream", "H264", true,
+            "Send H.264 video to browsers that can decode it (Chrome, Edge, Firefox and Safari on the internet link): several times smaller "
+            + "than JPEG pictures, so a much better picture on slow connections. Uses Cisco's OpenH264, downloaded once from Cisco (0.5 MB). "
+            + "OpenH264 Video Codec provided by Cisco Systems, Inc.");
+        MaxBitrateKbps = config.Bind("Stream", "MaxBitrateKbps", 6000,
+            new ConfigDescription("Highest H.264 bitrate in kbit/s. The stream starts at 2000 and climbs while the connection keeps up.", new AcceptableValueRange<int>(300, 50000)));
         AdaptiveQuality = config.Bind("Stream", "AdaptiveQuality", true, "Lower the quality (and then the size) automatically while a guest's connection can't keep up.");
         StreamAudio = config.Bind("Stream", "StreamAudio", true, "Send the game's sound to guests.");
         EncoderThreads = config.Bind("Stream", "EncoderThreads", 0, "CPU threads for picture encoding. 0 = half your cores, up to 6.");
@@ -81,6 +89,8 @@ internal static class OnlineConfig
         MaxHeight = MaxHeight.Value,
         Quality = Quality.Value,
         AdaptiveQuality = AdaptiveQuality.Value,
+        UseH264 = H264.Value,
+        MaxBitrateKbps = MaxBitrateKbps.Value,
         StreamAudio = StreamAudio.Value,
         EncoderThreads = EncoderThreads.Value,
         ToolDirectory = Plugin.PluginDirectory,

@@ -19,8 +19,11 @@ public sealed class ServerOptions
     public int Port = 7777;
     /// <summary>Guests allowed at once: the one playing P2 plus spectators.</summary>
     public int MaxGuests = 4;
-    /// <summary>Most video frames a guest may have on the way before we wait for acknowledgements.</summary>
-    public int MaxFramesInFlight = 6;
+    /// <summary>
+    /// Most video frames a guest may have on the way before we wait for acknowledgements. High enough
+    /// for 30 fps over a 300 ms round trip; flow control keeps it lower when frames start to queue.
+    /// </summary>
+    public int MaxFramesInFlight = 12;
     public string HostName = "Host";
 }
 
@@ -38,6 +41,8 @@ public struct HostStatus
     public string Note;
 }
 
+public enum VideoCodec { Jpeg, H264 }
+
 public sealed class GuestInfo
 {
     public string Name = "";
@@ -47,6 +52,7 @@ public sealed class GuestInfo
     /// <summary>Frames allowed on the way to this guest right now.</summary>
     public int Window;
     public bool Congested;
+    public VideoCodec Codec;
     /// <summary>Flow-control internals, for the log: lowest ack delay, estimated throughput, frames acked per second.</summary>
     public string Diagnostics = "";
 }
@@ -189,6 +195,7 @@ public sealed class HostServer : IDisposable
                 KbitPerSecond = s.KbitPerSecond,
                 Window = s.Window,
                 Congested = s.Congested,
+                Codec = CodecOf(s),
                 Diagnostics = s.Diagnostics,
             }).ToList();
         }
@@ -246,15 +253,65 @@ public sealed class HostServer : IDisposable
         return false;
     }
 
-    /// <summary>Queues a finished video packet for every guest that is keeping up.</summary>
-    public void SendVideo(uint frameId, byte[] packet)
+    /// <summary>Set once the H.264 encoder is ready; guests whose browser can decode it switch over.</summary>
+    public bool H264Available
+    {
+        get => _h264Available;
+        set
+        {
+            lock (_lock)
+            {
+                if (value && !_h264Available)
+                    foreach (Session s in _sessions) s.NeedsKeyframe = true;
+                _h264Available = value;
+            }
+        }
+    }
+    private volatile bool _h264Available;
+
+    private VideoCodec CodecOf(Session s) => s.SupportsH264 && _h264Available ? VideoCodec.H264 : VideoCodec.Jpeg;
+
+    /// <summary>Is anyone watching in this format?</summary>
+    public bool HasGuestsUsing(VideoCodec codec)
+    {
+        lock (_lock) return _sessions.Any(s => s.Joined && CodecOf(s) == codec);
+    }
+
+    /// <summary>An H.264 guest can't continue without a keyframe (just joined, missed a frame, or its decoder asked).</summary>
+    public bool WantsKeyframe()
+    {
+        lock (_lock) return _sessions.Any(s => s.Joined && CodecOf(s) == VideoCodec.H264 && s.NeedsKeyframe);
+    }
+
+    /// <summary>
+    /// Queues a finished video packet for every guest watching in <paramref name="codec"/> that is keeping
+    /// up. An H.264 guest that has to skip a frame waits for the next keyframe, since the frames after it
+    /// build on it.
+    /// </summary>
+    public void SendVideo(uint frameId, byte[] packet, VideoCodec codec = VideoCodec.Jpeg, bool keyFrame = true)
     {
         double now = Now;
         lock (_lock)
         {
             foreach (Session s in _sessions)
             {
-                if (!s.Joined || s.FramesInFlight >= s.Window) continue;
+                if (!s.Joined || CodecOf(s) != codec) continue;
+                if (codec == VideoCodec.H264)
+                {
+                    if (keyFrame) s.NeedsKeyframe = false;
+                    else if (s.NeedsKeyframe) continue;
+                    // The frame was captured because a guest had room; the window may have shrunk while
+                    // it was encoded. Skipping it would cost a (big) keyframe, so allow a little over.
+                    if (s.FramesInFlight >= s.Window + 2)
+                    {
+                        s.NeedsKeyframe = true;
+                        continue;
+                    }
+                }
+                else if (s.FramesInFlight >= s.Window)
+                {
+                    continue;
+                }
                 s.SentAt[frameId] = (now, packet.Length);
                 s.Enqueue(new Outgoing(WebSocketOpcode.Binary, packet, OutgoingKind.Video));
             }
@@ -493,6 +550,15 @@ public sealed class HostServer : IDisposable
             case "audio":
                 session.WantsAudio = GetFloat(root, "on") > 0.5f;
                 break;
+            case "key":
+                // The guest's H.264 decoder lost track; send it a keyframe.
+                lock (_lock) session.NeedsKeyframe = true;
+                break;
+            case "noh264":
+                // H.264 didn't work in this browser after all: back to JPEG pictures.
+                lock (_lock) session.SupportsH264 = false;
+                Log.Info($"{session.Name}'s browser couldn't decode H.264; sending JPEG pictures.");
+                break;
             case "pick":
                 lock (_lock)
                 {
@@ -531,6 +597,8 @@ public sealed class HostServer : IDisposable
         }
 
         session.Name = CleanName(root.TryGetProperty("name", out JsonElement n) ? n.GetString() : null);
+        if (root.TryGetProperty("codecs", out JsonElement codecs) && codecs.ValueKind == JsonValueKind.Array)
+            session.SupportsH264 = codecs.EnumerateArray().Any(e => e.ValueKind == JsonValueKind.String && e.GetString() == "h264");
         string clientId = root.TryGetProperty("id", out JsonElement idElement) ? (idElement.GetString() ?? "") : "";
         bool wantsPlayer = !root.TryGetProperty("want", out JsonElement want) || want.GetString() != "watch";
         session.ClientId = clientId.Length > 64 ? clientId.Substring(0, 64) : clientId;
@@ -564,7 +632,8 @@ public sealed class HostServer : IDisposable
         string loadout;
         lock (_lock) loadout = _loadout;
         if (loadout.Length > 0) session.EnqueueText(loadout);
-        Log.Info($"{session.Name} joined from {session.Remote} as {(role == "player" ? "P2" : "a spectator")}.");
+        Log.Info($"{session.Name} joined from {session.Remote} as {(role == "player" ? "P2" : "a spectator")}"
+            + $" ({(session.SupportsH264 ? "browser decodes H.264" : "JPEG pictures only")}).");
         return true;
     }
 
@@ -690,6 +759,10 @@ public sealed class HostServer : IDisposable
         public string ClientId = "";
         public bool Joined;
         public bool WantsAudio = true;
+        /// <summary>The browser said it can decode H.264 (WebCodecs).</summary>
+        public bool SupportsH264;
+        /// <summary>Only a keyframe can be sent next (H.264).</summary>
+        public bool NeedsKeyframe = true;
         /// <summary>When each unacknowledged video frame was queued and its size, by frame id.</summary>
         public readonly Dictionary<uint, (double At, int Bytes)> SentAt = new();
         public int FramesInFlight => SentAt.Count;
@@ -698,21 +771,20 @@ public sealed class HostServer : IDisposable
         public string Diagnostics = "";
         private double _minDelay = double.MaxValue, _previousMinDelay = double.MaxValue, _minDelaySince = Now;
         private double _averageDelay;
-        private double _lastIncrease, _lastDecrease, _congestedUntil, _noIncreaseUntil;
-        private double _fpsBeforeIncrease = -1;
+        private double _lastIncrease, _lastDecrease, _congestedUntil;
+        private double _delayDeviation;
         private readonly Queue<(double At, long Bytes)> _ackHistory = new();
         private long _bytesAcked;
 
         /// <summary>
-        /// Flow control from acknowledgement delays: a frame's delay runs from being queued here to its
-        /// ack, so it covers sending, the network round trip and the browser's decode. The lowest
-        /// delay seen lately is the cost with nothing queued; anything above it is frames waiting
-        /// behind each other because the connection is full.
-        ///   * no queueing and below the target frame rate: allow one more frame on the way (at most
-        ///     once a second), because the round trip rather than the connection is the limit;
-        ///   * queueing: allow one fewer and report congestion, so the picture gets smaller.
-        /// This keeps the frame rate up on high-latency links without piling frames (and lag) up on
-        /// slow ones.
+        /// Flow control from acknowledgement delays. A frame's delay runs from being queued here to its
+        /// ack, so it covers sending, the network round trip and the browser's decode. The lowest delay
+        /// seen lately is the cost with nothing queued.
+        ///   * Enough frames may be on the way that the round trip alone doesn't hold the frame rate
+        ///     below the target (about target fps x round trip).
+        ///   * When the average delay climbs clearly above the lowest, frames are waiting behind each
+        ///     other because the connection is full: allow one fewer and report congestion, so the
+        ///     stream sends fewer bytes per frame. "Clearly" allows for the link's normal jitter.
         /// </summary>
         public void OnFrameAcknowledged(double sentAt, int bytes, double now, int targetFps, int maxWindow)
         {
@@ -726,6 +798,7 @@ public sealed class HostServer : IDisposable
             if (delay < _minDelay) _minDelay = delay;
             double minDelay = Math.Min(_minDelay, _previousMinDelay);
             _averageDelay = _averageDelay <= 0 ? delay : _averageDelay * 0.75 + delay * 0.25;
+            _delayDeviation = _delayDeviation * 0.9 + Math.Abs(delay - _averageDelay) * 0.1;
 
             _bytesAcked += bytes;
             _ackHistory.Enqueue((now, _bytesAcked));
@@ -735,8 +808,10 @@ public sealed class HostServer : IDisposable
             double fps = span > 0.2 ? (_ackHistory.Count - 1) / span : targetFps;
             double mbit = span > 0.2 ? (_bytesAcked - firstBytes) * 8 / 1e6 / span : 0;
 
+            int needed = Math.Clamp((int)Math.Ceiling(targetFps * (minDelay + 0.02)) + 1, 2, Math.Max(2, maxWindow));
             double queueing = _averageDelay - minDelay;
-            if (queueing > Math.Max(0.02, minDelay * 0.3))
+            double threshold = Math.Max(0.04, Math.Max(minDelay * 0.35, Math.Min(0.12, _delayDeviation * 3)));
+            if (queueing > threshold)
             {
                 if (now - _lastDecrease > 0.3)
                 {
@@ -744,31 +819,21 @@ public sealed class HostServer : IDisposable
                     _lastDecrease = now;
                 }
                 _congestedUntil = now + 1.5;
-                _fpsBeforeIncrease = -1;
             }
-            else if (_fpsBeforeIncrease >= 0 && now - _lastIncrease > 2)
+            else if (Window < needed && now - _lastIncrease > 0.5 && now - _lastDecrease > 1)
             {
-                // Judge the last extra frame: keep it only if it bought frame rate. If not, the
-                // connection itself is the limit; hold off probing for a while.
-                if (fps < _fpsBeforeIncrease * 1.1)
-                {
-                    Window = Math.Max(2, Window - 1);
-                    _noIncreaseUntil = now + 10;
-                }
-                _fpsBeforeIncrease = -1;
-            }
-            else if (fps < targetFps * 0.9 && now > _noIncreaseUntil && now - _lastIncrease > 1 && now - _lastDecrease > 2 && Window < maxWindow)
-            {
-                _fpsBeforeIncrease = fps;
                 Window++;
                 _lastIncrease = now;
             }
-            // Below the target with no room to grow: the connection is what's holding the frame rate
-            // back, so smaller frames are the only way to more of them.
-            if (fps < targetFps * 0.75 && now < _noIncreaseUntil) _congestedUntil = Math.Max(_congestedUntil, now + 1.5);
+            else if (Window > needed && now - _lastDecrease > 1)
+            {
+                // More than the round trip needs only adds lag if the link slows down.
+                Window--;
+                _lastDecrease = now;
+            }
             AchievedFps = fps;
             Diagnostics = FormattableString.Invariant(
-                $"minDelay={minDelay * 1000:0}ms avgDelay={_averageDelay * 1000:0}ms fps={fps:0.0} {mbit:0.0}Mbit");
+                $"minDelay={minDelay * 1000:0}ms avgDelay={_averageDelay * 1000:0}ms jitter={_delayDeviation * 1000:0}ms fps={fps:0.0} {mbit:0.0}Mbit");
         }
 
         public double AchievedFps;

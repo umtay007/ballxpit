@@ -81,6 +81,7 @@ internal static class OnlineController
                 else if (FrameGrabber.Error != null) status.Note = "The host's screen capture has a problem.";
                 server.SetHostStatus(status);
                 LogNewLinks(host);
+                if (now >= _nextStreamLog) LogStream(host, server, now);
             }
         }
         catch (Exception ex)
@@ -105,6 +106,23 @@ internal static class OnlineController
                 Plugin.Logger.LogWarning("Game sound can't be streamed: " + ex.Message);
             }
         }
+    }
+
+    private static float _nextStreamLog;
+
+    /// <summary>Every 20 s while someone watches: how the stream is doing, for the log.</summary>
+    private static void LogStream(OnlineHost host, HostServer server, float now)
+    {
+        _nextStreamLog = now + 20f;
+        List<GuestInfo> guests = server.GetGuests();
+        VideoStreamer? video = host.Video;
+        if (guests.Count == 0 || video == null) return;
+        string format = video.LastCodec == VideoCodec.H264 ? $"H.264 target {video.CurrentBitrate / 1000} kbit/s" : $"JPEG q{video.CurrentQuality}";
+        Plugin.Logger.LogInfo($"Stream: {video.OutputWidth}x{video.OutputHeight} {format}, {video.FramesPerSecond} fps, "
+            + $"{video.LastFrameBytes / 1024} KB/frame, encode {video.LastEncodeMs:0} ms. H.264: {host.VideoCodecStatus}");
+        foreach (GuestInfo g in guests)
+            Plugin.Logger.LogInfo($"  {g.Name} ({(g.IsPlayer ? "P2" : "watching")}, {g.Codec}): ping {g.PingMs} ms, {g.KbitPerSecond / 1000:0.0} Mbit/s, "
+                + $"window {g.Window}, {(g.Congested ? "congested" : "clear")}, {g.Diagnostics}");
     }
 
     /// <summary>
@@ -388,7 +406,7 @@ internal static class OnlineController
         {
             foreach (GuestInfo guest in guests)
                 Row($"{(guest.IsPlayer ? "Playing P2" : "Watching")}: {guest.Name}  ·  {guest.PingMs} ms  ·  {guest.KbitPerSecond / 1000:0.0} Mbit/s"
-                    + (guest.Congested ? "  ·  connection full" : ""));
+                    + $"  ·  {(guest.Codec == VideoCodec.H264 ? "H.264" : "JPEG")}" + (guest.Congested ? "  ·  connection full" : ""));
         }
         if (!PlayerTwoBridge.IsPlayerTwoActive()) Row("P2 appears when a run starts.");
 
@@ -398,7 +416,12 @@ internal static class OnlineController
         VideoStreamer? video = host.Video;
         if (FrameGrabber.Error != null) Row("! Screen capture: " + FrameGrabber.Error);
         else if (video != null && guests.Count > 0)
-            Row($"Picture {video.OutputWidth}x{video.OutputHeight}  ·  {video.FramesPerSecond} fps  ·  quality {video.CurrentQuality}  ·  {video.LastFrameBytes / 1024} KB/frame  ·  encode {video.LastEncodeMs:0} ms");
+        {
+            string format = video.LastCodec == VideoCodec.H264
+                ? $"H.264 {video.CurrentBitrate / 1e6:0.0} Mbit/s"
+                : $"JPEG quality {video.CurrentQuality}" + (server.H264Available ? "" : $" ({host.VideoCodecStatus})");
+            Row($"Picture {video.OutputWidth}x{video.OutputHeight}  ·  {video.FramesPerSecond} fps  ·  {format}  ·  {video.LastFrameBytes / 1024} KB/frame  ·  encode {video.LastEncodeMs:0} ms");
+        }
 
         float third = (width - 2 * RowGap) / 3f;
         if (GUI.Button(new Rect(x, y, third, RowHeight), "Kick P2")) server.KickPlayer();
