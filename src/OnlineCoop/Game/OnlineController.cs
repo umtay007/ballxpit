@@ -353,7 +353,8 @@ internal static class OnlineController
         else
         {
             foreach (GuestInfo guest in guests)
-                Row($"{(guest.IsPlayer ? "Playing P2" : "Watching")}: {guest.Name}  ·  {guest.PingMs} ms  ·  {guest.KbitPerSecond / 1000:0.0} Mbit/s");
+                Row($"{(guest.IsPlayer ? "Playing P2" : "Watching")}: {guest.Name}  ·  {guest.PingMs} ms  ·  {guest.KbitPerSecond / 1000:0.0} Mbit/s"
+                    + (guest.Congested ? "  ·  connection full" : ""));
         }
         if (!PlayerTwoBridge.IsPlayerTwoActive()) Row("P2 appears when a run starts.");
 

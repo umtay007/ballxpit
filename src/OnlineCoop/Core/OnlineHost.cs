@@ -14,7 +14,7 @@ public sealed class OnlineHostOptions
     public bool UseUpnp = true;
     public int MaxGuests = 4;
     public int MaxFps = 30;
-    public int MaxWidth = 960;
+    public int MaxHeight = 540;
     public int Quality = 60;
     public bool AdaptiveQuality = true;
     public bool StreamAudio = true;
@@ -95,7 +95,7 @@ public sealed class OnlineHost : IDisposable
         Video = new VideoStreamer(server, threads)
         {
             MaxFps = Math.Clamp(_options.MaxFps, 5, 60),
-            MaxWidth = Math.Clamp(_options.MaxWidth, 320, 3840),
+            MaxHeight = Math.Clamp(_options.MaxHeight, 180, 2160),
             Quality = Math.Clamp(_options.Quality, 10, 95),
             AdaptiveQuality = _options.AdaptiveQuality,
         };

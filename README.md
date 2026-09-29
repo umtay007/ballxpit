@@ -27,9 +27,12 @@ controller. Players install it with [docs/INSTALL.txt](docs/INSTALL.txt).
   private members through `IgnoresAccessChecksTo`, compiling against a publicized copy.
 - **Video.** After each rendered frame (`WaitForEndOfFrame`) the back buffer is read with
   `Texture2D.ReadPixels`, but only when a guest is ready for another picture. A managed baseline
-  JPEG encoder shrinks it (1920 wide to 960) and encodes horizontal strips in parallel, joined with
-  restart markers. Guests acknowledge frames, and at most two are in flight, so a slow connection
-  lowers the frame rate and then the quality instead of adding delay.
+  JPEG encoder shrinks it (1080 lines to 540) and encodes horizontal strips in parallel, joined with
+  restart markers. Guests acknowledge every frame. From the acknowledgement delays the host
+  works out how many frames may be on the way: more on high-latency links, so the round trip
+  doesn't cap the frame rate, and fewer as soon as frames start queueing on a slow link, so lag
+  stays low. When the connection is what holds the frame rate down, JPEG quality drops and then
+  the picture shrinks another step; both climb back when there's room.
 - **Audio.** A component next to the `AudioListener` copies the final mix in `OnAudioFilterRead`
   and sends 20 ms IMA ADPCM packets (about 390 kbit/s for 48 kHz stereo).
 - **Host panel.** Press F8, or click the "Online Co-op" button in the top-right corner of the menus
@@ -66,6 +69,10 @@ isolated so a failure only disables its own feature.
 dotnet build test/FakeHost/FakeHost.csproj -c Release -o out/fakehost
 cd test && npm install && node e2e.mjs
 ```
+
+`node stream.mjs "rtt=60 down=30" "rtt=60 down=3"` runs the same stream through `netsim.mjs`, a
+proxy that adds latency and caps bandwidth like a real internet link, and prints the frame rate,
+lag, quality and picture size the guest ends up with.
 
 `FakeHost` runs the networking core outside the game with synthetic 1080p frames and a test tone.
 `e2e.mjs` drives the guest page in headless Chromium and checks 24 things. They include the picture

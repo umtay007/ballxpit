@@ -1,4 +1,4 @@
-BALLxPIT Online Co-op 0.1.1
+BALLxPIT Online Co-op 0.1.2
 ===========================
 Play sparrow's "BALLxPIT: Local Coop" with a friend who is anywhere. Only you (the host) need the
 game and the mods. Your friend opens a link in their web browser, sees your screen, hears the game
@@ -86,7 +86,7 @@ IF SOMETHING'S OFF
 - The panel says your Local Coop DLL is the original: the old BALLxPITLocalCoop.dll is still being
   loaded. Delete it and keep the one from this zip.
 - Choppy or blurry picture: your upload is the limit. The mod already lowers quality by itself. In
-  BepInEx/config/BALLxPITOnlineCoop.cfg you can set MaxWidth = 640 or MaxFps = 20.
+  BepInEx/config/BALLxPITOnlineCoop.cfg you can set MaxHeight = 360 or MaxFps = 20.
 - Picture upside down for your friend: they press H and tick "Flip it".
 - No game sound for your friend: set StreamAudio = false if it causes any trouble for you.
 - Game stutters for you while hosting: lower MaxFps in the config.

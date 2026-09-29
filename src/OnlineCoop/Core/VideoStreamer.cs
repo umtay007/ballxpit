@@ -25,10 +25,13 @@ public sealed class VideoStreamer : IDisposable
     private int _framesThisSecond;
     private double _secondStartedAt;
     private volatile int _quality;
+    private volatile int _extraDownscale;
     private double _windowStartedAt;
-    private int _windowFrames;
-    private int _windowNetworkWaits;
+    private int _windowSamples;
+    private int _windowCongestedSamples;
+    private int _clearWindows;
     private const int MinAdaptiveQuality = 30;
+    private const int MaxExtraDownscale = 2;
 
     public VideoStreamer(HostServer server, int encoderThreads)
     {
@@ -38,10 +41,20 @@ public sealed class VideoStreamer : IDisposable
         _thread.Start();
     }
 
-    public int MaxFps { get; set; } = 30;
-    /// <summary>Frames wider than this are shrunk by a whole-number factor.</summary>
-    public int MaxWidth { get; set; } = 960;
-    /// <summary>Best JPEG quality to use. With <see cref="AdaptiveQuality"/> it drops while the upload can't keep up.</summary>
+    public int MaxFps
+    {
+        get => _maxFps;
+        set
+        {
+            _maxFps = value;
+            _server.TargetFps = value;
+        }
+    }
+    private int _maxFps = 30;
+
+    /// <summary>Frames taller than this are shrunk by a whole-number factor (1080 lines become 540).</summary>
+    public int MaxHeight { get; set; } = 540;
+    /// <summary>Best JPEG quality to use. With <see cref="AdaptiveQuality"/> it drops while the connection can't keep up.</summary>
     public int Quality { get; set; } = 60;
     public bool AdaptiveQuality { get; set; } = true;
     public int CurrentQuality => _quality > 0 ? _quality : Quality;
@@ -57,27 +70,58 @@ public sealed class VideoStreamer : IDisposable
     {
         AdaptQuality(now);
         if (_busy || now < _nextCaptureAt) return false;
-        if (_server.WantsVideoFrame()) return true;
-        if (_server.HasGuests) _windowNetworkWaits++;
-        return false;
+        return _server.WantsVideoFrame();
     }
 
     /// <summary>
-    /// Every two seconds: if the guests' connections held the frame rate well under the target,
-    /// make frames smaller; when it keeps up again, creep back towards the configured quality.
+    /// Every two seconds. While the guest's connection is congested (frames piling up on the way),
+    /// lower the JPEG quality; at the lowest quality, shrink the picture one more step instead. Once
+    /// it has been clear for a while, climb back: quality first, then picture size.
     /// </summary>
     private void AdaptQuality(double now)
     {
-        if (_quality <= 0 || _quality > Quality || !AdaptiveQuality) _quality = Quality;
+        if (!AdaptiveQuality)
+        {
+            _quality = Quality;
+            _extraDownscale = 0;
+            return;
+        }
+        if (_quality <= 0 || _quality > Quality) _quality = Quality;
+        if (_server.HasGuests)
+        {
+            _windowSamples++;
+            if (_server.IsCongested()) _windowCongestedSamples++;
+        }
         if (now - _windowStartedAt < 2) return;
-        double fps = _windowFrames / (now - _windowStartedAt);
-        if (AdaptiveQuality && _windowNetworkWaits > 0 && fps < MaxFps * 0.6 && _quality > MinAdaptiveQuality)
-            _quality = Math.Max(MinAdaptiveQuality, _quality - 8);
-        else if (AdaptiveQuality && fps >= MaxFps * 0.85 && _quality < Quality)
-            _quality = Math.Min(Quality, _quality + 4);
+
+        if (_windowSamples > 0)
+        {
+            double congested = _windowCongestedSamples / (double)_windowSamples;
+            if (congested > 0.4)
+            {
+                _clearWindows = 0;
+                if (_quality > MinAdaptiveQuality) _quality = Math.Max(MinAdaptiveQuality, _quality - 6);
+                else if (_extraDownscale < MaxExtraDownscale)
+                {
+                    _extraDownscale++;
+                    _quality = Math.Min(Quality, 45);
+                }
+            }
+            else if (congested < 0.1)
+            {
+                _clearWindows++;
+                if (_quality < Quality) _quality = Math.Min(Quality, _quality + 4);
+                else if (_extraDownscale > 0 && _clearWindows >= 3)
+                {
+                    _extraDownscale--;
+                    _quality = Math.Max(MinAdaptiveQuality, Quality - 15);
+                    _clearWindows = 0;
+                }
+            }
+        }
         _windowStartedAt = now;
-        _windowFrames = 0;
-        _windowNetworkWaits = 0;
+        _windowSamples = 0;
+        _windowCongestedSamples = 0;
     }
 
     /// <summary>Game thread: a buffer for a width x height RGBA32 frame. Fill it, then call <see cref="Submit"/>.</summary>
@@ -96,7 +140,6 @@ public sealed class VideoStreamer : IDisposable
         _height = height;
         _bottomUp = bottomUp;
         _nextCaptureAt = now + 1.0 / Math.Max(1, MaxFps);
-        _windowFrames++;
         _busy = true;
         _frameReady.Set();
     }
@@ -124,7 +167,8 @@ public sealed class VideoStreamer : IDisposable
 
     private void EncodeAndSend()
     {
-        int downscale = Math.Max(1, (int)Math.Round(_width / (double)Math.Max(160, MaxWidth)));
+        int downscale = Math.Max(1, (int)Math.Round(_height / (double)Math.Max(120, MaxHeight))) + _extraDownscale;
+        while (downscale > 1 && (_width / downscale < 16 || _height / downscale < 16)) downscale--;
         var watch = Stopwatch.StartNew();
         int length = _encoder.Encode(_pixels, _width, _height, _bottomUp, downscale, CurrentQuality, out byte[] jpeg);
         LastEncodeMs = watch.Elapsed.TotalMilliseconds;
@@ -139,7 +183,7 @@ public sealed class VideoStreamer : IDisposable
         packet[7] = (byte)outHeight;
         packet[8] = (byte)(outHeight >> 8);
         Buffer.BlockCopy(jpeg, 0, packet, 9, length);
-        _server.SendVideo(packet);
+        _server.SendVideo(id, packet);
 
         LastFrameBytes = length;
         OutputWidth = outWidth;

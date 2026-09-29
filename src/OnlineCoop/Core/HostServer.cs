@@ -19,8 +19,8 @@ public sealed class ServerOptions
     public int Port = 7777;
     /// <summary>Guests allowed at once: the one playing P2 plus spectators.</summary>
     public int MaxGuests = 4;
-    /// <summary>Video frames a guest may have outstanding before we wait for its acknowledgement.</summary>
-    public int MaxFramesInFlight = 2;
+    /// <summary>Most video frames a guest may have on the way before we wait for acknowledgements.</summary>
+    public int MaxFramesInFlight = 6;
     public string HostName = "Host";
 }
 
@@ -39,6 +39,11 @@ public sealed class GuestInfo
     public bool IsPlayer;
     public int PingMs;
     public double KbitPerSecond;
+    /// <summary>Frames allowed on the way to this guest right now.</summary>
+    public int Window;
+    public bool Congested;
+    /// <summary>Flow-control internals, for the log: lowest ack delay, estimated throughput, frames acked per second.</summary>
+    public string Diagnostics = "";
 }
 
 /// <summary>
@@ -154,6 +159,9 @@ public sealed class HostServer : IDisposable
                 IsPlayer = s == _player,
                 PingMs = s.PingMs,
                 KbitPerSecond = s.KbitPerSecond,
+                Window = s.Window,
+                Congested = s.Congested,
+                Diagnostics = s.Diagnostics,
             }).ToList();
         }
     }
@@ -170,7 +178,7 @@ public sealed class HostServer : IDisposable
         {
             foreach (Session s in _sessions)
             {
-                if (s.Joined && s.FramesInFlight < _options.MaxFramesInFlight) return true;
+                if (s.Joined && s.FramesInFlight < s.Window) return true;
             }
         }
         return false;
@@ -181,16 +189,36 @@ public sealed class HostServer : IDisposable
         get { lock (_lock) return _sessions.Any(s => s.Joined); }
     }
 
-    /// <summary>Queues a finished video packet for every guest that is keeping up.</summary>
-    public void SendVideo(byte[] packet)
+    /// <summary>Frame rate the stream aims for; sets how many frames may be on the way per guest.</summary>
+    public int TargetFps { get; set; } = 30;
+
+    /// <summary>
+    /// True while frames pile up on the way to the guest playing P2 (or, with nobody playing, to any
+    /// guest): their connection can't carry this picture quality at this frame rate.
+    /// </summary>
+    public bool IsCongested()
     {
+        lock (_lock)
+        {
+            if (_player != null) return _player.Congested;
+            foreach (Session s in _sessions)
+            {
+                if (s.Joined && s.Congested) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Queues a finished video packet for every guest that is keeping up.</summary>
+    public void SendVideo(uint frameId, byte[] packet)
+    {
+        double now = Now;
         lock (_lock)
         {
             foreach (Session s in _sessions)
             {
-                if (!s.Joined || s.FramesInFlight >= _options.MaxFramesInFlight) continue;
-                if (s.FramesInFlight == 0) s.LastAckAt = Now;
-                s.FramesInFlight++;
+                if (!s.Joined || s.FramesInFlight >= s.Window) continue;
+                s.SentAt[frameId] = (now, packet.Length);
                 s.Enqueue(new Outgoing(WebSocketOpcode.Binary, packet, OutgoingKind.Video));
             }
         }
@@ -395,10 +423,11 @@ public sealed class HostServer : IDisposable
                 }
                 break;
             case "ack":
+                uint frameId = (uint)Math.Clamp(GetFloat(root, "f"), 0, uint.MaxValue);
                 lock (_lock)
                 {
-                    if (session.FramesInFlight > 0) session.FramesInFlight--;
-                    session.LastAckAt = Now;
+                    if (session.SentAt.Remove(frameId, out var sent))
+                        session.OnFrameAcknowledged(sent.At, sent.Bytes, Now, TargetFps, _options.MaxFramesInFlight);
                 }
                 break;
             case "tog":
@@ -518,11 +547,7 @@ public sealed class HostServer : IDisposable
                     s.UpdateRate(now);
                     if (now - s.LastSeenAt > 20) stale.Add(s);
                     // A backgrounded browser tab stops acknowledging; don't let it stall forever.
-                    if (s.FramesInFlight > 0 && now - s.LastAckAt > 3)
-                    {
-                        s.FramesInFlight = 0;
-                        s.LastAckAt = now;
-                    }
+                    s.ForgetFramesOlderThan(now - 3);
                     if (s.Joined) s.EnqueueText(status);
                 }
                 foreach (var key in _failedJoins.Where(kv => now - kv.Value.Since > 120).Select(kv => kv.Key).ToList())
@@ -613,8 +638,89 @@ public sealed class HostServer : IDisposable
         public string ClientId = "";
         public bool Joined;
         public bool WantsAudio = true;
-        public int FramesInFlight;
-        public double LastAckAt;
+        /// <summary>When each unacknowledged video frame was queued and its size, by frame id.</summary>
+        public readonly Dictionary<uint, (double At, int Bytes)> SentAt = new();
+        public int FramesInFlight => SentAt.Count;
+        public int Window = 2;
+        public bool Congested => Now < _congestedUntil;
+        public string Diagnostics = "";
+        private double _minDelay = double.MaxValue, _previousMinDelay = double.MaxValue, _minDelaySince = Now;
+        private double _averageDelay;
+        private double _lastIncrease, _lastDecrease, _congestedUntil, _noIncreaseUntil;
+        private double _fpsBeforeIncrease = -1;
+        private readonly Queue<(double At, long Bytes)> _ackHistory = new();
+        private long _bytesAcked;
+
+        /// <summary>
+        /// Flow control from acknowledgement delays: a frame's delay runs from being queued here to its
+        /// ack, so it covers sending, the network round trip and the browser's decode. The lowest
+        /// delay seen lately is the cost with nothing queued; anything above it is frames waiting
+        /// behind each other because the connection is full.
+        ///   * no queueing and below the target frame rate: allow one more frame on the way (at most
+        ///     once a second), because the round trip rather than the connection is the limit;
+        ///   * queueing: allow one fewer and report congestion, so the picture gets smaller.
+        /// This keeps the frame rate up on high-latency links without piling frames (and lag) up on
+        /// slow ones.
+        /// </summary>
+        public void OnFrameAcknowledged(double sentAt, int bytes, double now, int targetFps, int maxWindow)
+        {
+            double delay = now - sentAt;
+            if (now - _minDelaySince > 5)
+            {
+                _previousMinDelay = _minDelay;
+                _minDelay = double.MaxValue;
+                _minDelaySince = now;
+            }
+            if (delay < _minDelay) _minDelay = delay;
+            double minDelay = Math.Min(_minDelay, _previousMinDelay);
+            _averageDelay = _averageDelay <= 0 ? delay : _averageDelay * 0.75 + delay * 0.25;
+
+            _bytesAcked += bytes;
+            _ackHistory.Enqueue((now, _bytesAcked));
+            while (_ackHistory.Count > 2 && now - _ackHistory.Peek().At > 1) _ackHistory.Dequeue();
+            (double firstAt, long firstBytes) = _ackHistory.Peek();
+            double span = now - firstAt;
+            double fps = span > 0.2 ? (_ackHistory.Count - 1) / span : targetFps;
+            double mbit = span > 0.2 ? (_bytesAcked - firstBytes) * 8 / 1e6 / span : 0;
+
+            double queueing = _averageDelay - minDelay;
+            if (queueing > Math.Max(0.02, minDelay * 0.3))
+            {
+                if (now - _lastDecrease > 0.3)
+                {
+                    Window = Math.Max(2, Window - 1);
+                    _lastDecrease = now;
+                }
+                _congestedUntil = now + 1.5;
+                _fpsBeforeIncrease = -1;
+            }
+            else if (_fpsBeforeIncrease >= 0 && now - _lastIncrease > 2)
+            {
+                // Judge the last extra frame: keep it only if it bought frame rate. If not, the
+                // connection itself is the limit; hold off probing for a while.
+                if (fps < _fpsBeforeIncrease * 1.1)
+                {
+                    Window = Math.Max(2, Window - 1);
+                    _noIncreaseUntil = now + 10;
+                }
+                _fpsBeforeIncrease = -1;
+            }
+            else if (fps < targetFps * 0.9 && now > _noIncreaseUntil && now - _lastIncrease > 1 && now - _lastDecrease > 2 && Window < maxWindow)
+            {
+                _fpsBeforeIncrease = fps;
+                Window++;
+                _lastIncrease = now;
+            }
+            // Below the target with no room to grow: the connection is what's holding the frame rate
+            // back, so smaller frames are the only way to more of them.
+            if (fps < targetFps * 0.75 && now < _noIncreaseUntil) _congestedUntil = Math.Max(_congestedUntil, now + 1.5);
+            AchievedFps = fps;
+            Diagnostics = FormattableString.Invariant(
+                $"minDelay={minDelay * 1000:0}ms avgDelay={_averageDelay * 1000:0}ms fps={fps:0.0} {mbit:0.0}Mbit");
+        }
+
+        public double AchievedFps;
+
         public double LastSeenAt = Now;
         public int QueuedAudio;
         public int PingMs;
@@ -655,6 +761,17 @@ public sealed class HostServer : IDisposable
             {
             }
             Close();
+        }
+
+        public void ForgetFramesOlderThan(double cutoff)
+        {
+            List<uint>? stale = null;
+            foreach (var entry in SentAt)
+            {
+                if (entry.Value.At < cutoff) (stale ??= new List<uint>()).Add(entry.Key);
+            }
+            if (stale == null) return;
+            foreach (uint id in stale) SentAt.Remove(id);
         }
 
         public void UpdateRate(double now)

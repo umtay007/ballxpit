@@ -16,7 +16,7 @@ internal static class OnlineConfig
     public static ConfigEntry<bool> Upnp = null!;
     public static ConfigEntry<int> MaxGuests = null!;
     public static ConfigEntry<int> MaxFps = null!;
-    public static ConfigEntry<int> MaxWidth = null!;
+    public static ConfigEntry<int> MaxHeight = null!;
     public static ConfigEntry<int> Quality = null!;
     public static ConfigEntry<bool> AdaptiveQuality = null!;
     public static ConfigEntry<bool> StreamAudio = null!;
@@ -43,10 +43,11 @@ internal static class OnlineConfig
             + "The port is closed again when you stop hosting.");
 
         MaxFps = config.Bind("Stream", "MaxFps", 30, new ConfigDescription("Most frames per second sent to guests.", new AcceptableValueRange<int>(5, 60)));
-        MaxWidth = config.Bind("Stream", "MaxWidth", 960,
-            new ConfigDescription("Frames wider than this are shrunk by a whole-number factor (1920 wide becomes 960).", new AcceptableValueRange<int>(320, 3840)));
+        MaxHeight = config.Bind("Stream", "MaxHeight", 540,
+            new ConfigDescription("Pictures taller than this are shrunk by a whole-number factor (1080 lines become 540). "
+                + "It shrinks further by itself while a guest's connection can't keep up.", new AcceptableValueRange<int>(180, 2160)));
         Quality = config.Bind("Stream", "Quality", 60, new ConfigDescription("JPEG quality of the picture.", new AcceptableValueRange<int>(10, 95)));
-        AdaptiveQuality = config.Bind("Stream", "AdaptiveQuality", true, "Lower the quality automatically while your upload can't keep up.");
+        AdaptiveQuality = config.Bind("Stream", "AdaptiveQuality", true, "Lower the quality (and then the size) automatically while a guest's connection can't keep up.");
         StreamAudio = config.Bind("Stream", "StreamAudio", true, "Send the game's sound to guests.");
         EncoderThreads = config.Bind("Stream", "EncoderThreads", 0, "CPU threads for picture encoding. 0 = half your cores, up to 6.");
     }
@@ -59,7 +60,7 @@ internal static class OnlineConfig
         UseUpnp = Upnp.Value,
         MaxGuests = MaxGuests.Value,
         MaxFps = MaxFps.Value,
-        MaxWidth = MaxWidth.Value,
+        MaxHeight = MaxHeight.Value,
         Quality = Quality.Value,
         AdaptiveQuality = AdaptiveQuality.Value,
         StreamAudio = StreamAudio.Value,

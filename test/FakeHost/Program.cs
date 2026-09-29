@@ -24,7 +24,11 @@ Console.WriteLine($"CODE {server.JoinCode}");
 Console.WriteLine($"PORT {server.Port}");
 Console.Out.Flush();
 
-const int W = 1920, H = 1080;
+// FAKEHOST_SIZE=2560x1080 mimics an ultrawide host; FAKEHOST_DETAIL=1 adds texture so frames are
+// about as big as real game frames.
+string[] size = (Environment.GetEnvironmentVariable("FAKEHOST_SIZE") ?? "1920x1080").Split('x');
+int W = int.Parse(size[0], CultureInfo.InvariantCulture), H = int.Parse(size[1], CultureInfo.InvariantCulture);
+bool detail = Environment.GetEnvironmentVariable("FAKEHOST_DETAIL") == "1";
 var audioThread = new Thread(() =>
 {
     // 440 Hz left, 660 Hz right, pushed in 10 ms blocks like Unity's mixer would.
@@ -50,6 +54,12 @@ var audioThread = new Thread(() =>
 }) { IsBackground = true };
 audioThread.Start();
 
+var backgrounds = new byte[4][];
+for (int i = 0; i < backgrounds.Length; i++)
+{
+    backgrounds[i] = new byte[W * H * 4];
+    Draw(backgrounds[i], W, H, detail, i * 7, -1000, -1000);
+}
 var started = DateTime.UtcNow;
 int frame = 0;
 GuestInput last = default;
@@ -80,7 +90,11 @@ while ((DateTime.UtcNow - started).TotalSeconds < runFor)
     if (host.Video!.ShouldCapture(now))
     {
         byte[] px = host.Video.GetCaptureBuffer(W, H);
-        Draw(px, frame, (int)boxX, (int)boxY);
+        // Cycle through a few pre-drawn frames (drawing 2560x1080 in C# every frame would make this
+        // harness, not the stream, the bottleneck), then stamp P2's box on top.
+        byte[] background = backgrounds[frame % backgrounds.Length];
+        Buffer.BlockCopy(background, 0, px, 0, background.Length);
+        DrawBox(px, W, H, (int)boxX, (int)boxY);
         host.Video.Submit(W, H, bottomUp: true, now);
     }
     if (now - lastStats > 2)
@@ -89,7 +103,7 @@ while ((DateTime.UtcNow - started).TotalSeconds < runFor)
         foreach (JoinLink link in host.GetLinks()) Console.WriteLine($"LINK {link.Label} {link.Url}");
         if (tunnelDir != null) Console.WriteLine($"TUNNEL {host.TunnelStatus}");
         foreach (GuestInfo g in server.GetGuests())
-            Console.WriteLine(FormattableString.Invariant($"GUEST {g.Name} player={g.IsPlayer} ping={g.PingMs} kbps={g.KbitPerSecond:0}"));
+            Console.WriteLine(FormattableString.Invariant($"GUEST {g.Name} player={g.IsPlayer} ping={g.PingMs} kbps={g.KbitPerSecond:0} window={g.Window} congested={g.Congested} {g.Diagnostics}"));
         Console.WriteLine(FormattableString.Invariant($"VIDEO fps={host.Video.FramesPerSecond} encode={host.Video.LastEncodeMs:0.0}ms quality={host.Video.CurrentQuality} bytes={host.Video.LastFrameBytes} size={host.Video.OutputWidth}x{host.Video.OutputHeight}"));
     }
     Console.Out.Flush();
@@ -99,7 +113,7 @@ host.Stop();
 return 0;
 
 // Bottom-up RGBA like Texture2D.ReadPixels: row 0 is the bottom of the screen.
-static void Draw(byte[] px, int frame, int boxX, int boxY)
+static void Draw(byte[] px, int W, int H, bool detail, int frame, int boxX, int boxY)
 {
     for (int y = 0; y < H; y++)
     {
@@ -111,8 +125,30 @@ static void Draw(byte[] px, int frame, int boxX, int boxY)
             byte r = (byte)(x * 255 / W), g = (byte)(top * 255 / H), b = (byte)((frame * 4) & 255);
             // A red band across the top 10% so the test can check orientation.
             if (top < H / 10) { r = 230; g = 20; b = 20; }
+            if (detail)
+            {
+                // Pixel-art-like texture that changes every frame, like a busy game scene.
+                int h = ((x / 3) * 73856093) ^ ((top / 3) * 19349663) ^ (frame * 83492791);
+                int n = (h >> 13) & 63;
+                r = (byte)Math.Min(255, r / 2 + n);
+                g = (byte)Math.Min(255, g / 2 + ((h >> 7) & 63));
+                b = (byte)Math.Min(255, b / 2 + ((h >> 19) & 63));
+            }
             if (x >= boxX && x < boxX + 100 && top >= boxY && top < boxY + 100) { r = 255; g = 255; b = 255; }
             px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255;
+        }
+    }
+}
+
+static void DrawBox(byte[] px, int W, int H, int boxX, int boxY)
+{
+    for (int top = Math.Max(0, boxY); top < Math.Min(H, boxY + 100); top++)
+    {
+        int row = (H - 1 - top) * W * 4;
+        for (int x = Math.Max(0, boxX); x < Math.Min(W, boxX + 100); x++)
+        {
+            int i = row + x * 4;
+            px[i] = 255; px[i + 1] = 255; px[i + 2] = 255;
         }
     }
 }
